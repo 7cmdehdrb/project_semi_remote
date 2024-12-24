@@ -1,0 +1,18 @@
+<launch>
+  <arg name="sim" default="false" />
+  <arg name="debug" default="false" />
+
+  <!-- Remap follow_joint_trajectory -->
+  <remap if="$(arg sim)" from="/scaled_pos_joint_traj_controller/follow_joint_trajectory" to="/pos_joint_traj_controller/follow_joint_trajectory"/>
+
+  <!-- Launch moveit -->
+  <include file="$(find ur5e_moveit_config)/launch/move_group.launch">
+    <arg name="debug" default="$(arg debug)" />
+  </include>
+
+  <!-- Cam TF -->
+  <node pkg="tf" type="static_transform_publisher" name="cam_pub" args="0.0 -0.1025 0.031 0.0 0.0 0.0 1.0 tool0 EEF_camera_link 100" />
+  <node pkg="tf" type="static_transform_publisher" name="VGC_pub" args="0.0 0.0 0.14 0.5 -0.5 0.5 0.5 tool0 VGC 100" />
+  <node pkg="tf" type="static_transform_publisher" name="map_pub" args="0.0 0.0 0.0 0.0 0.0 0.0 1.0 map base_link 100" />
+
+</launch>
