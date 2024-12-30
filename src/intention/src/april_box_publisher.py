@@ -31,6 +31,27 @@ import apriltag
 import json
 
 
+class PositionAverageFilter:
+    def __init__(self):
+        self.i = 0
+        self.average = np.array([0.0, 0.0, 0.0])
+
+    def filter(self, data):
+        # 샘플 수 +1 (+1 the number of sample)
+        self.i += 1
+
+        # 평균 필터의 alpha 값 (alpha of average filter)
+        alpha = (self.i - 1) / (self.i + 0.0)
+
+        # 평균 필터의 재귀식 (recursive expression of average filter)
+        average = alpha * self.average + (1 - alpha) * data
+
+        # 평균 필터의 이전 상태값 업데이트 (update previous state value of average filter)
+        self.average = average
+
+        return average
+
+
 class AprilBoxPublisher:
     def __init__(self):
         self.april_detector = AprilTagDetector(
@@ -38,6 +59,7 @@ class AprilBoxPublisher:
         )
 
         self.boxes = None
+        self.filters = {}
 
         self.april_box_pub = rospy.Publisher(
             "/box_objects/raw", BoxObjectMultiArrayWithPDF, queue_size=1
@@ -46,10 +68,39 @@ class AprilBoxPublisher:
     def publish(self):
         if self.boxes is None:
             # Initialize the boxes
+            for tag in self.april_detector.tags.tags:
+                tag: BoxObjectWithPDF
+                self.filters[str(tag.id)] = PositionAverageFilter()
 
             new_box_array = BoxObjectMultiArrayWithPDF()
             new_box_array.header = Header(frame_id="map", stamp=rospy.Time.now())
-            new_box_array.boxes = self.april_detector.tags.tags
+
+            for tag in self.april_detector.tags.tags:
+                tag: BoxObjectWithPDF
+
+                avg_filter = self.filters[str(tag.id)]
+                avg_filter: PositionAverageFilter
+
+                average = avg_filter.filter(
+                    [
+                        tag.pose.position.x,
+                        tag.pose.position.y,
+                        tag.pose.position.z,
+                    ]
+                )
+
+                pose = Pose(
+                    position=Point(
+                        x=average[0],
+                        y=average[1],
+                        z=average[2],
+                    ),
+                    orientation=tag.pose.orientation,
+                )
+
+                tag.pose = pose
+
+                new_box_array.boxes.append(tag)
 
             self.boxes = new_box_array
             self.april_box_pub.publish(self.boxes)
@@ -65,15 +116,59 @@ class AprilBoxPublisher:
 
         for tag in self.april_detector.tags.tags:
             if tag.id in newly_recognized_id:
+                avg_filter = PositionAverageFilter()
+                self.filters[str(tag.id)] = avg_filter
+
                 new_box = BoxObjectWithPDF()
+
                 new_box.id = tag.id
-                new_box.pose = tag.pose
+                new_box.header = Header(frame_id="map", stamp=rospy.Time.now())
+
+                average = avg_filter.filter(
+                    [
+                        tag.pose.position.x,
+                        tag.pose.position.y,
+                        tag.pose.position.z,
+                    ]
+                )
+
+                pose = Pose(
+                    position=Point(
+                        x=average[0],
+                        y=average[1],
+                        z=average[2],
+                    ),
+                    orientation=tag.pose.orientation,
+                )
+
+                new_box.pose = pose
+
                 new_box_array.boxes.append(new_box)
 
             else:
                 for box in self.boxes.boxes:
                     if box.id == tag.id:
-                        box.pose = tag.pose
+                        avg_filter = self.filters[str(tag.id)]
+                        avg_filter: PositionAverageFilter
+
+                        average = avg_filter.filter(
+                            [
+                                tag.pose.position.x,
+                                tag.pose.position.y,
+                                tag.pose.position.z,
+                            ]
+                        )
+
+                        pose = Pose(
+                            position=Point(
+                                x=average[0],
+                                y=average[1],
+                                z=average[2],
+                            ),
+                            orientation=tag.pose.orientation,
+                        )
+
+                        box.pose = pose
 
         self.boxes = new_box_array
 

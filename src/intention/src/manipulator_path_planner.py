@@ -189,6 +189,11 @@ class ManipulatorPathPlanner:
         # Joint Converter
         self.joint_order = EEFTwistState.JointOrder()
 
+    # 로지스틱 함수 정의
+    @staticmethod
+    def logistic(x, midpoint, steepness, low, high):
+        return low + (high - low) / (1 + np.exp(-steepness * (x - midpoint)))
+
     @staticmethod
     def dh_transform(a, d, alpha, theta):
         """
@@ -392,7 +397,14 @@ class ManipulatorPathPlanner:
         velocity_vector = target_pose_vector - current_eef_pose_vector
         distance = np.linalg.norm(velocity_vector)
 
-        velocity_vector = (velocity_vector / distance) * v
+        velocity_vector = (
+            (velocity_vector / distance)
+            * v
+            * ManipulatorPathPlanner.logistic(distance, 0.2, 20, 0.05, 1.0)
+        )
+
+        if velocity_vector[0] < 0:
+            velocity_vector = np.array([0.0, 0.0, 0.0])
 
         return velocity_vector
 
