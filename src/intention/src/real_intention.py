@@ -3,6 +3,7 @@
 # Basic modules
 import os
 import sys
+import roslib.exceptions
 import rospy
 import roslib
 import numpy as np
@@ -38,7 +39,7 @@ except roslib.exceptions.ROSLibException:
     sys.exit(1)
 
 
-class Plane(object):
+class Plane:
     def __init__(self, n: np.array, d: float):
         if not isinstance(n, np.ndarray):
             raise ValueError("n must be a numpy array")
@@ -96,15 +97,16 @@ class Plane(object):
 
 
 class BoxManager:
+    """박스 객체를 관리하는 클래스. 박스 정보를 수집"""
+
     def __init__(self):
         self.boxes_subscriber = rospy.Subscriber(
-            "", BoxObjectMultiArrayWithPDF, self.boxes_callback
+            "/box_objects/raw", BoxObjectMultiArrayWithPDF, self.boxes_callback
         )
-        
+        self.boxes_msg = BoxObjectMultiArrayWithPDF()
+
     def boxes_callback(self, msg: BoxObjectMultiArrayWithPDF):
-        for box in msg.boxes:
-            # Do something with the box
-            pass
+        self.boxes_msg = msg
 
 
 class RealIntentionGaussian:
@@ -221,9 +223,15 @@ class RealIntentionGaussian:
             return 0.0, 0.0
 
     def __init__(self):
-        # Define EEF
+        # Map 기준 Plane. TODO: Update plane automatically
+        self.plane = Plane(
+            n=np.array([0.99887537, 0.0465492, 0.00900962]), d=-0.8969238154115642
+        )
+
+        # Define EEF state
         self.eef_pose_state = State(topic=None, frame_id="VGC")
         self.eef_twist_state = EEFTwistState()
+        self.box_manager = BoxManager()
 
         # 최종 이차원 평균 및 공분산
         self.mean = np.array([0, 0])
@@ -232,17 +240,34 @@ class RealIntentionGaussian:
         # 누적되는 교차점 데이터
         self.intersections = np.empty((0, 3))
 
-        self.plane = Plane(
-            n=np.array([0.99887537, 0.0465492, 0.00900962]), d=-0.8969238154115642
+        # Subscriber
+        self.controller_sub = rospy.Subscriber(
+            "/controller/right/joy", Joy, self.controller_callback
         )
 
+    def controller_callback(self, msg: Joy):
+        """오른쪽 컨트롤러 조이스틱 메세지 콜백"""
+        if len(msg.buttons) != 4:
+            rospy.logwarn("Invalid controller message")
+            return
+
+        A = msg.buttons[0]
+        B = msg.buttons[1]
+        SF = msg.buttons[2]
+        TF = msg.buttons[3]
+
+        if A:
+            self.reset()
+            rospy.loginfo("Reset")
+
     def reset(self):
+        """평균, 공분산, 교차점 데이터 초기화"""
         self.mean = np.array([0, 0])
         self.cov = np.eye(2)
         self.intersections = np.empty((0, 3))
 
     def calculate_mean_and_cov(self):
-        """mean(np.array), cov(np.array) 리턴하는 함수. 자동적으로 내부에 self.intersections 누적"""
+        """mean(np.array), cov(np.array) 리턴하는 함수. 자동적으로 내부에 self.mean, self.cov 업데이트, self.intersections 누적. 리턴 무시"""
         p = (
             self.eef_pose_state.get_target_frame_pose()
         )  # Map 프레임 상의 EEF 위치 계산, VGC
@@ -257,17 +282,18 @@ class RealIntentionGaussian:
         v = np.array([v.x, v.y, v.z])
 
         # 교점 계산
-        _, intersection = (
+        forward, intersection = (
             RealIntentionGaussian.IntersectionMethod.get_intersection_point(
                 p, v, self.plane
             )
         )
 
-        # 초기화
-        mean_2d, cov_2d = None, None
-
         if np.isnan(intersection).any():
             # rospy.logwarn("No intersection")
+            return None, None
+
+        if not forward:
+            # rospy.logwarn("No forward intersection")
             return None, None
 
         try:
@@ -279,8 +305,12 @@ class RealIntentionGaussian:
                 )
             )
 
-            # 3D to 2D
+            # 3D -> 2D 변환
+            mean_2d, cov_2d = None, None
             mean_2d, cov_2d = self.plane.transform_to_2d(mean, cov)
+
+            self.mean = mean_2d
+            self.cov = cov_2d
 
             return mean_2d, cov_2d
 
@@ -293,20 +323,66 @@ class RealIntentionGaussian:
             rospy.logwarn(ex)
             return None, None
 
+    def get_boxes_with_pdf(self):
+        """박스 매니저에 있는 박스 객체에 PDF를 추가하여 리턴. 박스 매니저 인스턴스를 수정하지는 않음"""
+        update_msg = BoxObjectMultiArrayWithPDF()
+
+        if len(self.box_manager.boxes_msg.boxes) == 0:
+            return update_msg
+
+        # Update header
+        update_msg.header = self.box_manager.boxes_msg.header
+
+        rv = multivariate_normal(self.mean, self.cov)
+        max_pdf = rv.pdf(self.mean)
+
+        for box in self.box_manager.boxes_msg.boxes:
+            box: BoxObjectWithPDF
+
+            updated_box = BoxObjectWithPDF()
+
+            box_position = np.array(
+                [box.pose.position.x, box.pose.position.y, box.pose.position.z]
+            )
+
+            position_2d, _, _ = self.plane.project_to_plane(box_position)
+            pdf = rv.pdf(position_2d)
+
+            updated_box = box
+            updated_box.pdf = pdf / max_pdf
+
+            update_msg.boxes.append(box)
+
+        return update_msg
+
 
 def main():
     rospy.init_node("real_intention_gaussian_node")  # TODO: Add node name
 
     intention = RealIntentionGaussian()
 
-    r = rospy.Rate(10)  # TODO: Add rate
+    # Publisher
+    intention_publisher = rospy.Publisher(
+        "/intention/real/pdf", BoxObjectMultiArrayWithPDF, queue_size=1
+    )
+
+    # rospy.spin()
+
+    r = rospy.Rate(30)  # TODO: Add rate
     while not rospy.is_shutdown():
+
+        # Update mean and covariance
+        intention.calculate_mean_and_cov()
+
+        # Publish PDF
+        intention_publisher.publish(intention.get_boxes_with_pdf())
+
         r.sleep()
 
 
 if __name__ == "__main__":
-    main()
     try:
+        main()
         pass
     except rospy.ROSInterruptException as ros_ex:
         rospy.logfatal("ROS Interrupted.")

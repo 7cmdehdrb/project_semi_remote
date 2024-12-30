@@ -15,7 +15,7 @@ int main(int argc, char** argv)
     ros::NodeHandle nh;
 
     // PCD 파일 경로
-    std::string pcd_file = "/home/catkin_ws/src/localization/resources/241108.pcd";
+    std::string pcd_file = "/home/workspace/src/localization/resources/241108.pcd";
 
     // PointCloud2 발행을 위한 퍼블리셔 생성
     ros::Publisher cloud_pub = nh.advertise<sensor_msgs::PointCloud2>("/map", 1);

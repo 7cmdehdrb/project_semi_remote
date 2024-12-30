@@ -58,6 +58,7 @@ class EEFTwistState:
 
         def set_order(self, order: list):
             self.order = order
+            
 
         def change_idx(self, joint_state: JointState):
             new_joint_state = JointState()
