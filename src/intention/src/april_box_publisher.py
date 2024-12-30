@@ -49,6 +49,7 @@ class PositionAverageFilter:
         # 평균 필터의 이전 상태값 업데이트 (update previous state value of average filter)
         self.average = average
 
+        return data
         return average
 
 
@@ -64,6 +65,32 @@ class AprilBoxPublisher:
         self.april_box_pub = rospy.Publisher(
             "/box_objects/raw", BoxObjectMultiArrayWithPDF, queue_size=1
         )
+        self.april_pose_pub = rospy.Publisher(
+            "/box_objects/posearray", PoseArray, queue_size=1
+        )
+
+    def parse_box_object_to_posearray(self) -> PoseArray:
+        pose_array = PoseArray()
+
+        if self.boxes is None:
+            return pose_array
+
+        pose_array.header = self.boxes.header
+
+        for box in self.boxes.boxes:
+            pose = Pose(
+                position=box.pose.position,
+                orientation=Quaternion(
+                    x=0.0,
+                    y=0.0,
+                    z=0.0,
+                    w=1.0,
+                ),
+            )
+            # pose_array.poses.append(box.pose)
+            pose_array.poses.append(pose)
+
+        return pose_array
 
     def publish(self):
         if self.boxes is None:
@@ -82,11 +109,13 @@ class AprilBoxPublisher:
                 avg_filter: PositionAverageFilter
 
                 average = avg_filter.filter(
-                    [
-                        tag.pose.position.x,
-                        tag.pose.position.y,
-                        tag.pose.position.z,
-                    ]
+                    np.array(
+                        [
+                            tag.pose.position.x,
+                            tag.pose.position.y,
+                            tag.pose.position.z,
+                        ]
+                    )
                 )
 
                 pose = Pose(
@@ -125,11 +154,13 @@ class AprilBoxPublisher:
                 new_box.header = Header(frame_id="map", stamp=rospy.Time.now())
 
                 average = avg_filter.filter(
-                    [
-                        tag.pose.position.x,
-                        tag.pose.position.y,
-                        tag.pose.position.z,
-                    ]
+                    np.array(
+                        [
+                            tag.pose.position.x,
+                            tag.pose.position.y,
+                            tag.pose.position.z,
+                        ]
+                    )
                 )
 
                 pose = Pose(
@@ -152,11 +183,13 @@ class AprilBoxPublisher:
                         avg_filter: PositionAverageFilter
 
                         average = avg_filter.filter(
-                            [
-                                tag.pose.position.x,
-                                tag.pose.position.y,
-                                tag.pose.position.z,
-                            ]
+                            np.array(
+                                [
+                                    tag.pose.position.x,
+                                    tag.pose.position.y,
+                                    tag.pose.position.z,
+                                ]
+                            )
                         )
 
                         pose = Pose(
@@ -175,6 +208,7 @@ class AprilBoxPublisher:
         rospy.loginfo(f"Publishing {len(self.boxes.boxes)} boxes.")
 
         self.april_box_pub.publish(self.boxes)
+        self.april_pose_pub.publish(self.parse_box_object_to_posearray())
 
 
 class AprilTagDetector:
@@ -376,8 +410,9 @@ def main():
 
 
 if __name__ == "__main__":
+    main()
     try:
-        main()
+        pass
     except rospy.ROSInterruptException as ros_ex:
         rospy.logfatal("ROS Interrupted.")
         rospy.logfatal(ros_ex)

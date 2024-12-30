@@ -129,6 +129,10 @@ class BoxManager:
             box: BoxObjectWithPDF
             total_pdf += box.pdf
 
+        if total_pdf == 0.0:
+            rospy.logwarn("The total pdf is zero.")
+            total_pdf = float("inf")
+
         for box in msg.boxes:
             box: BoxObjectWithPDF
 
@@ -395,15 +399,17 @@ class ManipulatorPathPlanner:
 
         # 해당 포인트로 이동하기 위한 속도 벡터 생성, dt초에 이동
         velocity_vector = target_pose_vector - current_eef_pose_vector
+
+        x_distance = velocity_vector[0]
         distance = np.linalg.norm(velocity_vector)
 
         velocity_vector = (
             (velocity_vector / distance)
             * v
-            * ManipulatorPathPlanner.logistic(distance, 0.2, 20, 0.05, 1.0)
+            * ManipulatorPathPlanner.logistic(distance, 0.05, 40, 0.05, 1.0)
         )
 
-        if velocity_vector[0] < 0:
+        if x_distance < 0:
             velocity_vector = np.array([0.0, 0.0, 0.0])
 
         return velocity_vector
@@ -417,6 +423,8 @@ class ManipulatorPathPlanner:
             self.bayisian_filter.get_best_object()
         )  # Get the best object, Dictionary type
 
+        best_object_id = 1
+
         best_object_pose = self.box_manager.get_pose(best_object_id)
 
         if best_object_pose is None:
@@ -425,11 +433,8 @@ class ManipulatorPathPlanner:
 
         linear_velocity = self.straight_planning(target_pose=best_object_pose, v=0.05)
 
-        print("Linear Velocity: ", linear_velocity)
-        print("Best Object Possibility: ", best_object_possibility)
-        print(
-            f"Best Object Position: ({best_object_pose.position.x}, {best_object_pose.position.y}, {best_object_pose.position.z})"
-        )
+        # print("Linear Velocity: ", linear_velocity)
+        # print("Best Object Possibility: ", best_object_possibility)
 
         # Publish the linear velocity
         linear_velocity_msg = Twist()
@@ -459,8 +464,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
     try:
+        main()
         pass
     except rospy.ROSInterruptException as ros_ex:
         rospy.logfatal("ROS Interrupted.")

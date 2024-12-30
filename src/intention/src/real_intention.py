@@ -280,6 +280,8 @@ class RealIntentionGaussian:
 
         test = True
 
+        # TODO: Remove Test Code.
+
         p: PoseStamped
         if test:
             p = np.array([p.pose.position.x, p.pose.position.y, p.pose.position.z])
@@ -293,8 +295,6 @@ class RealIntentionGaussian:
         else:
             p = np.array([p.pose.position.x, p.pose.position.y, p.pose.position.z])
             v = np.array([v.x, v.y, v.z])
-
-        print(p, v)
 
         # 교점 계산
         forward, intersection = (
@@ -324,8 +324,9 @@ class RealIntentionGaussian:
             mean_2d, cov_2d = None, None
             mean_2d, cov_2d = self.plane.transform_to_2d(mean, cov)
 
-            self.mean = mean_2d
-            self.cov = cov_2d
+            if mean_2d is not None and cov_2d is not None:
+                self.mean = mean_2d
+                self.cov = cov_2d
 
             return mean_2d, cov_2d
 
@@ -350,6 +351,9 @@ class RealIntentionGaussian:
 
         rv = multivariate_normal(self.mean, self.cov, allow_singular=True)
         max_pdf = rv.pdf(self.mean)
+
+        if max_pdf == 0.0:
+            max_pdf = float("inf")
 
         for box in self.box_manager.boxes_msg.boxes:
             box: BoxObjectWithPDF
@@ -389,7 +393,7 @@ def main():
         # Update mean and covariance
         intention.calculate_mean_and_cov()
 
-        print(intention.mean)
+        # print(intention.mean)
 
         # Publish PDF
         intention_publisher.publish(intention.get_boxes_with_pdf())

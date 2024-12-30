@@ -88,7 +88,20 @@ class AutoController:
 
     def get_control_input(self) -> np.array:
         linear_vel = self.auto_controller_twist.linear
-        return np.array([-linear_vel.x, -linear_vel.y, linear_vel.z, 0.0, 0.0, 0.0])
+
+        forward_gain = 0.7
+        lateral_gain = 2.0
+
+        return np.array(
+            [
+                -linear_vel.x * forward_gain,
+                -linear_vel.y * lateral_gain,
+                linear_vel.z * lateral_gain,
+                0.0,
+                0.0,
+                0.0,
+            ]
+        )
 
 
 class URControl:
@@ -180,7 +193,7 @@ def main():
 
     robot_control = URControl(hz=hz)
 
-    homing = True
+    homing = False
 
     if homing:
 
@@ -205,21 +218,13 @@ def main():
         ]
 
         target_pose = [
-            -0.9780807819608803 + 0.165,
-            -0.1219679303618654,
-            0.02961141973208689,
+            -0.9965229559475928 + 0.14,
+            -0.14247539224163633,
+            0.02680560979457672,
             -1.2214908956568804,
             -1.228907826548365,
             1.2008402405898584,
         ]
-
-        # x: 0.9780807819608803
-        # y: 0.1219679303618654
-        # z: 0.02961141973208689
-
-        robot_control.rtde_c.moveL(
-            target_pose, speed=0.1, acceleration=1.2, asynchronous=False
-        )
 
         rospy.spin()
 
@@ -244,7 +249,7 @@ if __name__ == "__main__":
     except Exception as ex:
         rospy.logfatal("Exception occurred.")
         rospy.logfatal(ex)
-    finally:
-        rospy.loginfo("Shutting down.")
-        rospy.signal_shutdown("Shutting down.")
-        sys.exit(0)
+    # finally:
+    #     rospy.loginfo("Shutting down.")
+    #     rospy.signal_shutdown("Shutting down.")
+    #     sys.exit(0)
