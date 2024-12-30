@@ -1,0 +1,8 @@
+<launch>
+
+    <include file="$(find ur_robot_driver)/launch/ur5e_bringup.launch">
+        <arg name="controllers" value="joint_state_controller joint_group_position_controller speed_scaling_state_controller force_torque_sensor_controller"/>
+        <arg name="stopped_controllers" value="pos_joint_traj_controller scaled_pos_joint_traj_controller joint_group_vel_controller"/>
+    </include>
+
+</launch>

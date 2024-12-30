@@ -1,0 +1,9 @@
+<robot name="your_robot">
+  <link name="fov">
+    <visual>
+      <geometry>
+        <mesh filename="package://collision_detect/description/meshes/FOV.stl" />
+      </geometry>
+    </visual>
+  </link>
+</robot>

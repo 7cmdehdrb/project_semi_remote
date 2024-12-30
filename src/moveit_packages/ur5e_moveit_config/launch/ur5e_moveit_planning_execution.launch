@@ -12,6 +12,7 @@
 
   <!-- Cam TF -->
   <node pkg="tf" type="static_transform_publisher" name="cam_pub" args="0.0 -0.1025 0.031 0.0 0.0 0.0 1.0 tool0 EEF_camera_link 100" />
+  <node pkg="tf" type="static_transform_publisher" name="d405_pub" args="0.0 -0.1025 0.031 0.0 0.0 0.0 1.0 tool0 d405_camera_link 100" />
   <node pkg="tf" type="static_transform_publisher" name="VGC_pub" args="0.0 0.0 0.14 0.5 -0.5 0.5 0.5 tool0 VGC 100" />
   <node pkg="tf" type="static_transform_publisher" name="map_pub" args="0.0 0.0 0.0 0.0 0.0 0.0 1.0 map base_link 100" />
 

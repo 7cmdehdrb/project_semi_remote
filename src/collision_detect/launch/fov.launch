@@ -1,0 +1,4 @@
+<launch>
+  <param name="robot_description" textfile="$(find collision_detect)/description/urdf/FOV.urdf.xml"/>
+  <!-- <node name="rviz" pkg="rviz" type="rviz" args="-d $(find your_package_name)/config/your_rviz_config.rviz"/> -->
+</launch>

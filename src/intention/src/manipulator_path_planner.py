@@ -56,7 +56,10 @@ class BayisianFilter:
 
         self.baysian_objects = baysian_objects
 
+        return self.baysian_objects
+
     def get_normalized_constant(self, objects: dict):
+
         if len(self.baysian_objects.items()) < len(objects.items()):
             """목표 객체의 개수가 변했을 때. 줄어드는 경우는 넘겨주는 레벨에서 잘못한 것임."""
             rospy.logwarn("The number of objects has changed.")
@@ -93,6 +96,10 @@ class BayisianFilter:
         return new_baysian_objects
 
     def get_best_object(self):
+        if len(self.baysian_objects.items()) == 0:
+            rospy.logwarn("The baysian objects are empty.")
+            return -1, 0.0
+
         best_object_id = max(self.baysian_objects, key=self.baysian_objects.get)
         return int(best_object_id), float(self.baysian_objects[best_object_id])
 
@@ -357,6 +364,38 @@ class ManipulatorPathPlanner:
         rospy.logwarn("Planning failed.")
         return np.array([0.0, 0.0, 0.0])
 
+    def straight_planning(self, target_pose: Pose, v: float = 0.05) -> np.array:
+        current_eef_pose = self.eef_state.get_target_frame_pose()
+
+        if current_eef_pose is None:
+            rospy.logwarn("The current eef pose is None.")
+            return np.array([0.0, 0.0, 0.0])
+
+        # Position 만 넘파이 배열로 변환
+        current_eef_pose_vector = np.array(
+            [
+                current_eef_pose.pose.position.x,
+                current_eef_pose.pose.position.y,
+                current_eef_pose.pose.position.z,
+            ]
+        )
+
+        target_pose_vector = np.array(
+            [
+                target_pose.position.x,
+                target_pose.position.y,
+                target_pose.position.z,
+            ]
+        )
+
+        # 해당 포인트로 이동하기 위한 속도 벡터 생성, dt초에 이동
+        velocity_vector = target_pose_vector - current_eef_pose_vector
+        distance = np.linalg.norm(velocity_vector)
+
+        velocity_vector = (velocity_vector / distance) * v
+
+        return velocity_vector
+
     def run(self):
         _ = self.bayisian_filter.filter(
             boxes=self.box_manager.normalized_boxes
@@ -372,7 +411,13 @@ class ManipulatorPathPlanner:
             rospy.logwarn("The best object pose is None.")
             return
 
-        linear_velocity = self.planning(target_pose=best_object_pose)
+        linear_velocity = self.straight_planning(target_pose=best_object_pose, v=0.05)
+
+        print("Linear Velocity: ", linear_velocity)
+        print("Best Object Possibility: ", best_object_possibility)
+        print(
+            f"Best Object Position: ({best_object_pose.position.x}, {best_object_pose.position.y}, {best_object_pose.position.z})"
+        )
 
         # Publish the linear velocity
         linear_velocity_msg = Twist()
@@ -391,7 +436,7 @@ class ManipulatorPathPlanner:
 def main():
     rospy.init_node("manipulator_path_planner_node")  # TODO: Add node name
 
-    manipulator_path_planner = ManipulatorPathPlanner()
+    manipulator_path_planner = ManipulatorPathPlanner(move_group_name="manipulator")
 
     r = rospy.Rate(10)  # TODO: Add rate
     while not rospy.is_shutdown():
@@ -402,8 +447,9 @@ def main():
 
 
 if __name__ == "__main__":
+    main()
     try:
-        main()
+        pass
     except rospy.ROSInterruptException as ros_ex:
         rospy.logfatal("ROS Interrupted.")
         rospy.logfatal(ros_ex)

@@ -68,7 +68,7 @@ class MetaController:
         # 오른손 검지 버튼이 눌렸을 때만, 속도 명령 부여
         if self.right_controller_joy.buttons[3] == 1:
             linear_vel = self.right_controller_twist.linear
-            return np.array([linear_vel.x, linear_vel.y, linear_vel.z, 0.0, 0.0, 0.0])
+            return np.array([linear_vel.y, -linear_vel.x, linear_vel.z, 0.0, 0.0, 0.0])
 
         # 오른손 검지 버튼이 눌리지 않았을 때, 정지 명령 부여
         else:
@@ -88,14 +88,14 @@ class AutoController:
 
     def get_control_input(self) -> np.array:
         linear_vel = self.auto_controller_twist.linear
-        return np.array([linear_vel.x, linear_vel.y, linear_vel.z, 0.0, 0.0, 0.0])
+        return np.array([-linear_vel.x, -linear_vel.y, linear_vel.z, 0.0, 0.0, 0.0])
 
 
 class URControl:
     class ControlMode(Enum):
         MANUAL = 0
         SEMI = 1
-        FULL = 2
+        AUTO = 2
 
     def __init__(self, hz: int = 30):
         self.hz = hz
@@ -111,7 +111,7 @@ class URControl:
         self.auto_controller = AutoController()
 
         # Control Mode
-        self.control_mode = self.ControlMode.SEMI
+        self.control_mode = self.ControlMode.AUTO
 
         # Joy Stick
         self.right_controller_joy_sub = rospy.Subscriber(
@@ -150,7 +150,7 @@ class URControl:
             and self.bayesian_possibility > self.bayesian_threshold
         ):
             rospy.loginfo("Bayesian Filter: Auto Control")
-            self.control_mode = self.ControlMode.FULL
+            self.control_mode = self.ControlMode.AUTO
 
     def control(self):
         manual_input = self.manual_controller.get_control_input()
@@ -161,11 +161,14 @@ class URControl:
         if self.control_mode == self.ControlMode.MANUAL:
             # 강제 수동 제어. 모든 입력을 수동 입력으로 변경
             possibility = 0.0
-        elif self.control_mode == self.ControlMode.FULL:
+        elif self.control_mode == self.ControlMode.AUTO:
             # 완전 제어. 모든 입력을 자동 입력으로 변경
             possibility = 1.0
 
         combined_input = possibility * auto_input + (1 - possibility) * manual_input
+
+        print(f"Mode: {self.control_mode}, Possibility: {possibility}")
+        print(combined_input)
 
         self.rtde_c.speedL(combined_input, acceleration=0.25)
 
@@ -177,17 +180,63 @@ def main():
 
     robot_control = URControl(hz=hz)
 
-    r = rospy.Rate(hz)  # TODO: Add rate
-    while not rospy.is_shutdown():
+    homing = True
 
-        robot_control.control()
+    if homing:
 
-        r.sleep()
+        robot_control.rtde_c.moveJ(
+            [
+                -3.1415770689593714,
+                -1.6416713200011195,
+                -2.69926118850708,
+                -1.9628821812071742,
+                -1.570578400288717,
+                3.141735315322876,
+            ]
+        )
+
+        home_tcp_pose = [
+            -0.27083100575785957,
+            0.13344653421177619,
+            0.1190586073329995,
+            -1.2214908956568804,
+            -1.228907826548365,
+            1.2008402405898584,
+        ]
+
+        target_pose = [
+            -0.9780807819608803 + 0.165,
+            -0.1219679303618654,
+            0.02961141973208689,
+            -1.2214908956568804,
+            -1.228907826548365,
+            1.2008402405898584,
+        ]
+
+        # x: 0.9780807819608803
+        # y: 0.1219679303618654
+        # z: 0.02961141973208689
+
+        robot_control.rtde_c.moveL(
+            target_pose, speed=0.1, acceleration=1.2, asynchronous=False
+        )
+
+        rospy.spin()
+
+    else:
+        r = rospy.Rate(hz)  # TODO: Add rate
+        while not rospy.is_shutdown():
+
+            robot_control.control()
+
+            r.sleep()
+
+    robot_control.rtde_c.stopL()
 
 
 if __name__ == "__main__":
-    main()
     try:
+        main()
         pass
     except rospy.ROSInterruptException as ros_ex:
         rospy.logfatal("ROS Interrupted.")

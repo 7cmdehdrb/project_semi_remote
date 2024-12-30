@@ -58,7 +58,6 @@ class EEFTwistState:
 
         def set_order(self, order: list):
             self.order = order
-            
 
         def change_idx(self, joint_state: JointState):
             new_joint_state = JointState()
@@ -94,14 +93,15 @@ class EEFTwistState:
             return new_joint_state
 
     def __init__(self, movegroup_name: str = "ENDEFFECTOR"):
+        self.orderer = self.JointOrder()
+        self.move_commander = MoveGroupCommander(movegroup_name)
+
         self.joint_states_subscriber = rospy.Subscriber(
             "/joint_states", JointState, self.joint_states_callback
         )
 
         # MoveIt Commander
-        self.move_commander = MoveGroupCommander(movegroup_name)
 
-        self.orderer = self.JointOrder()
         self.orderer.set_order(self.move_commander.get_active_joints())
 
         self.joint_states = JointState(
@@ -127,8 +127,6 @@ class EEFTwistState:
         """
         self.joint_states = self.orderer.change_idx(msg)
         self.twist = self.calculate_linear_velocities(self.joint_states)
-
-        print(self.twist, self.joint_states.velocity)
 
     def calculate_linear_velocities(self, joint_states: JointState):
         J = self.move_commander.get_jacobian_matrix(

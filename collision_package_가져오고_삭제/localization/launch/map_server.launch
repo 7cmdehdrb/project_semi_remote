@@ -1,3 +1,0 @@
-<launch>
-    <node name="map_server" pkg="map_server" type="map_server" args="/home/catkin_ws/src/localization/resources/GlobalMap.yaml" />
-</launch>

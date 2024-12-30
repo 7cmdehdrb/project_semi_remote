@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<robot name="square_pyramid">
+
+  <link name="FOV">
+    <visual>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0"/>
+      <geometry>
+        <mesh filename="package://collision_detect/description/meshes/FOV.stl"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0"/>
+      <geometry>
+        <mesh filename="package://collision_detect/description/meshes/FOV.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+</robot>

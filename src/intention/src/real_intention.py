@@ -30,6 +30,7 @@ from scipy.stats import multivariate_normal
 from scipy.stats import norm
 from scipy.integrate import quad
 from enum import Enum
+import random
 
 try:
     sys.path.append(roslib.packages.get_pkg_dir("base_package") + "/src")
@@ -99,9 +100,9 @@ class Plane:
 class BoxManager:
     """박스 객체를 관리하는 클래스. 박스 정보를 수집"""
 
-    def __init__(self):
+    def __init__(self, topic: str = "/box_objects/raw"):
         self.boxes_subscriber = rospy.Subscriber(
-            "/box_objects/raw", BoxObjectMultiArrayWithPDF, self.boxes_callback
+            topic, BoxObjectMultiArrayWithPDF, self.boxes_callback
         )
         self.boxes_msg = BoxObjectMultiArrayWithPDF()
 
@@ -230,8 +231,8 @@ class RealIntentionGaussian:
 
         # Define EEF state
         self.eef_pose_state = State(topic=None, frame_id="VGC")
-        self.eef_twist_state = EEFTwistState()
-        self.box_manager = BoxManager()
+        self.eef_twist_state = EEFTwistState(movegroup_name="manipulator")
+        self.box_manager = BoxManager(topic="/box_objects/raw")
 
         # 최종 이차원 평균 및 공분산
         self.mean = np.array([0, 0])
@@ -277,9 +278,23 @@ class RealIntentionGaussian:
             rospy.logwarn("No target frame pose")
             return None, None
 
+        test = True
+
         p: PoseStamped
-        p = np.array([p.pose.position.x, p.pose.position.y, p.pose.position.z])
-        v = np.array([v.x, v.y, v.z])
+        if test:
+            p = np.array([p.pose.position.x, p.pose.position.y, p.pose.position.z])
+            v = np.array(
+                [
+                    v.x + (random.randint(-100, 100) / 5000),
+                    v.y + (random.randint(-100, 100) / 5000),
+                    v.z + (random.randint(-100, 100) / 5000),
+                ]
+            )
+        else:
+            p = np.array([p.pose.position.x, p.pose.position.y, p.pose.position.z])
+            v = np.array([v.x, v.y, v.z])
+
+        print(p, v)
 
         # 교점 계산
         forward, intersection = (
@@ -333,7 +348,7 @@ class RealIntentionGaussian:
         # Update header
         update_msg.header = self.box_manager.boxes_msg.header
 
-        rv = multivariate_normal(self.mean, self.cov)
+        rv = multivariate_normal(self.mean, self.cov, allow_singular=True)
         max_pdf = rv.pdf(self.mean)
 
         for box in self.box_manager.boxes_msg.boxes:
@@ -363,16 +378,18 @@ def main():
 
     # Publisher
     intention_publisher = rospy.Publisher(
-        "/intention/real/pdf", BoxObjectMultiArrayWithPDF, queue_size=1
+        "/intention/real/pdf", BoxObjectMultiArrayWithPDF, queue_size=10
     )
 
     # rospy.spin()
 
-    r = rospy.Rate(30)  # TODO: Add rate
+    r = rospy.Rate(10)  # TODO: Add rate
     while not rospy.is_shutdown():
 
         # Update mean and covariance
         intention.calculate_mean_and_cov()
+
+        print(intention.mean)
 
         # Publish PDF
         intention_publisher.publish(intention.get_boxes_with_pdf())
