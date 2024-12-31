@@ -236,7 +236,7 @@ class RealIntentionGaussian:
 
         # 최종 이차원 평균 및 공분산
         self.mean = np.array([0, 0])
-        self.cov = np.eye(2)
+        self.cov = np.eye(2) * 999.9
 
         # 누적되는 교차점 데이터
         self.intersections = np.empty((0, 3))
@@ -312,6 +312,7 @@ class RealIntentionGaussian:
             return None, None
 
         try:
+            intersection *= 1000.0  # m -> mm
             self.intersections = np.vstack([self.intersections, intersection])
 
             mean, cov = (
@@ -325,6 +326,7 @@ class RealIntentionGaussian:
             mean_2d, cov_2d = self.plane.transform_to_2d(mean, cov)
 
             if mean_2d is not None and cov_2d is not None:
+                # mm Scale
                 self.mean = mean_2d
                 self.cov = cov_2d
 
@@ -344,16 +346,17 @@ class RealIntentionGaussian:
         update_msg = BoxObjectMultiArrayWithPDF()
 
         if len(self.box_manager.boxes_msg.boxes) == 0:
+            # Empty boxes
+            rospy.logwarn("No boxes")
             return update_msg
 
         # Update header
         update_msg.header = self.box_manager.boxes_msg.header
 
         rv = multivariate_normal(self.mean, self.cov, allow_singular=True)
-        max_pdf = rv.pdf(self.mean)
 
-        if max_pdf == 0.0:
-            max_pdf = float("inf")
+        max_pdf = rv.pdf(self.mean)
+        max_pdf = max_pdf if max_pdf != 0.0 else float("inf")  # Avoid division by zero
 
         for box in self.box_manager.boxes_msg.boxes:
             box: BoxObjectWithPDF
@@ -365,8 +368,9 @@ class RealIntentionGaussian:
             )
 
             position_2d, _, _ = self.plane.project_to_plane(box_position)
-            pdf = rv.pdf(position_2d)
+            pdf = rv.pdf(position_2d * 1000.0)  # m -> mm Scale
 
+            # Normalize PDF
             updated_box = box
             updated_box.pdf = pdf / max_pdf
 
@@ -393,9 +397,8 @@ def main():
         # Update mean and covariance
         intention.calculate_mean_and_cov()
 
-        # print(intention.mean)
-
         # Publish PDF
+        # 문제가 있으면, 초기화된 메세지가 발행됨.
         intention_publisher.publish(intention.get_boxes_with_pdf())
 
         r.sleep()
