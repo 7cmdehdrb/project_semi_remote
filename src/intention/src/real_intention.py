@@ -235,7 +235,7 @@ class RealIntentionGaussian:
         self.eef_pose_state = State(topic=None, frame_id="VGC")
         # self.eef_twist_state = EEFTwistState(movegroup_name="manipulator")
         self.eef_twist_sub = rospy.Subscriber(
-            "/calculated_twist", Twist, self.eef_twist_callback
+            "/end_effector/twist", Twist, self.eef_twist_callback
         )
         self.eef_twist = Twist()
 
@@ -245,6 +245,8 @@ class RealIntentionGaussian:
         self.mean = np.array([999.0, 999.0])
         self.cov = np.eye(2) * 999.9
         self.distance = float("inf")
+
+        self.pose_with_cov = PoseWithCovarianceStamped()
 
         # 누적되는 교차점 데이터
         self.intersections = np.empty((0, 3))
@@ -279,6 +281,24 @@ class RealIntentionGaussian:
         self.cov = np.eye(2) * 999.9
         self.intersections = np.empty((0, 3))
         self.distance = float("inf")
+
+    @staticmethod
+    def parse_mean_and_cov_to_pose_with_covariance(mean: np.array, cov: np.array):
+        if mean.shape != (3,) or cov.shape != (3, 3):
+            raise ValueError("Mean must be a 3-element vector and covariance")
+
+        pose_with_cov_stamp = PoseWithCovarianceStamped()
+
+        pose_with_cov_stamp.header = Header(frame_id="map", stamp=rospy.Time.now())
+        pose_with_cov_stamp.pose.pose.position = Point(x=mean[0], y=mean[1], z=mean[2])
+        pose_with_cov_stamp.pose.pose.orientation = Quaternion(x=0, y=0, z=0, w=1)
+
+        cov = np.eye(6)
+        cov[0:2, 0:2] = cov
+
+        pose_with_cov_stamp.pose.covariance = list(cov.flatten())
+
+        return pose_with_cov_stamp
 
     def calculate_mean_and_cov(self):
         """mean(np.array), cov(np.array) 리턴하는 함수. 자동적으로 내부에 self.mean, self.cov 업데이트, self.intersections 누적. 리턴 무시"""
@@ -342,14 +362,22 @@ class RealIntentionGaussian:
                 )
             )
 
+            pose_with_cov = (
+                RealIntentionGaussian.parse_mean_and_cov_to_pose_with_covariance(
+                    mean, cov
+                )
+            )
+
             # 3D -> 2D 변환
             mean_2d, cov_2d = None, None
             mean_2d, cov_2d = self.plane.transform_to_2d(mean, cov)
 
             if mean_2d is not None and cov_2d is not None:
-                # mm Scale
+
                 self.mean = mean_2d
                 self.cov = cov_2d
+
+                self.pose_with_cov = pose_with_cov
 
             return mean_2d, cov_2d
 
@@ -410,10 +438,12 @@ def main():
 
     # Publisher
     intention_publisher = rospy.Publisher(
-        "/intention/real/pdf", BoxObjectMultiArrayWithPDF, queue_size=10
+        "/box_objects/pdf", BoxObjectMultiArrayWithPDF, queue_size=10
     )
-    distance_publisher = rospy.Publisher(
-        "/intention/real/distance", Float32, queue_size=10
+    distance_publisher = rospy.Publisher("/intention/distance", Float32, queue_size=10)
+
+    log_publisher = rospy.Publisher(
+        "/intention/log/gaussian", PoseWithCovarianceStamped, queue_size=10
     )
 
     # rospy.spin()
@@ -422,18 +452,16 @@ def main():
     while not rospy.is_shutdown():
 
         # Update mean and covariance
-        try:
-            intention.calculate_mean_and_cov()
-        except Exception as ex:
-            rospy.logwarn(ex)
+        intention.calculate_mean_and_cov()
 
         rospy.loginfo(f"Mean: {intention.mean}")
         rospy.loginfo(f"Num of Intersections: {len(intention.intersections)}")
-        #
+
         # Publish PDF
         # 문제가 있으면, 초기화된 메세지가 발행됨.
         intention_publisher.publish(intention.get_boxes_with_pdf())
         distance_publisher.publish(Float32(data=intention.distance))
+        log_publisher.publish(intention.pose_with_cov)
 
         r.sleep()
 

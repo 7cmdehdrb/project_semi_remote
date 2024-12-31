@@ -67,7 +67,7 @@ class AprilBoxPublisher:
             "/box_objects/raw", BoxObjectMultiArrayWithPDF, queue_size=1
         )
         self.april_pose_pub = rospy.Publisher(
-            "/box_objects/posearray", PoseArray, queue_size=1
+            "/box_objects/pose_array", PoseArray, queue_size=1
         )
 
     def parse_box_object_to_posearray(self) -> PoseArray:

@@ -82,16 +82,15 @@ class AutoController:
         )
 
         self.auto_controller_twist = Twist()
-        self.vacuum_trigger = False
 
     def auto_controller_callback(self, msg: Twist):
         self.auto_controller_twist = msg
 
-    def get_control_input(self) -> np.array:
+    def get_control_input(self, v: float = 0.15) -> np.array:
         linear_vel = self.auto_controller_twist.linear
 
-        forward_gain = 0.7
-        lateral_gain = 2.0
+        forward_gain = 1.0
+        lateral_gain = 2.2
 
         velocity_matrix = np.array(
             [
@@ -104,16 +103,14 @@ class AutoController:
             ]
         )
 
-        self.vacuum_trigger = np.isclose(np.linalg.norm(velocity_matrix), 0)
-
         # 정규화된 속도에 대한 제어 입력
-        return 0.15 * velocity_matrix
+        return v * velocity_matrix
 
 
 class URControl:
     class ControlMode(Enum):
         MANUAL = 0
-        SEMI = 1
+        SEMI = 1  # 안씀
         AUTO = 2
         FORCE_CONTROL = 3
 
@@ -140,6 +137,7 @@ class URControl:
 
         # Vacuum Gripper
         self.vacuum_gripper_pub = rospy.Publisher("/vacuum", String, queue_size=10)
+        self.vacuum_gripper_state = False
 
         # Bayisian Filter
         self.bayisian_filter_sub = rospy.Subscriber(
@@ -150,8 +148,9 @@ class URControl:
         self.bayesian_possibility = 0.0
         self.bayesian_threshold = 0.5
 
+        # Distance
         self.distance_sub = rospy.Subscriber(
-            "/intention/real/distance", Float32, self.distance_callback
+            "/intention/distance", Float32, self.distance_callback
         )
         self.eef_distance = float("inf")
         self.eef_distance_threshold = 0.2
@@ -162,19 +161,31 @@ class URControl:
     def right_controller_joy_callback(self, msg: Joy):
         # 오른쪽 - [A, B, 중지, 검지]
         if len(msg.buttons) != 4:
+            # 예외 처리
             rospy.logwarn("Invalid Right Controller Joy Message")
             return None
 
+        # A 버튼이 눌렸을 때, Vacuum Gripper 온 전환
+        if msg.buttons[0] == 1:
+            self.vacuum_gripper_state = True
+            vacuum_command = "on" if self.vacuum_gripper_state else "off"
+            self.vacuum_gripper_pub.publish(vacuum_command)
+
+        # B 버튼이 눌렸을 때, Vacuum Gripper 오프 전환
         if msg.buttons[1] == 1:
-            self.vacuum_gripper_pub.publish("off")
+            self.vacuum_gripper_state = False
+            vacuum_command = "on" if self.vacuum_gripper_state else "off"
+            self.vacuum_gripper_pub.publish(vacuum_command)
 
+        # 중지 버튼이 눌렸을 때, 강제 수동 제어
         if msg.buttons[2] == 1:
-            # 중지 버튼이 눌렸을 때, 강제 수동 제어
 
+            # 자동 상태에서 강제 수동 제어로 변경
             if self.control_mode == self.ControlMode.AUTO:
                 rospy.loginfo("Change to Force Control")
                 self.control_mode = self.ControlMode.FORCE_CONTROL
 
+        # 중지 버튼이 눌리지 않았을 때, 강제 수동 제어 해제
         else:
             if self.control_mode == self.ControlMode.FORCE_CONTROL:
                 self.control_mode = self.ControlMode.MANUAL
@@ -182,58 +193,34 @@ class URControl:
     def bayesian_filter_callback(self, msg: Float32):
         self.bayesian_possibility = msg.data
 
-        print(self.control_mode)
-
         if self.control_mode == self.ControlMode.MANUAL:
-
-            print(
-                "Bayesian: ",
-                round(self.bayesian_possibility, 3),
-                round(self.bayesian_threshold, 3),
-            )
-            print(
-                "Distance: ",
-                round(self.eef_distance, 3),
-                round(self.eef_distance_threshold, 3),
-            )
-
+            # 수동 제어 상태에서 베이지안 확률이 높고, 거리가 작으면 자동으로 전환
             if (
                 self.bayesian_possibility > self.bayesian_threshold
                 and self.eef_distance < self.eef_distance_threshold
             ):
                 rospy.loginfo("Bayesian Filter: Auto Control")
                 self.control_mode = self.ControlMode.AUTO
-                self.vacuum_gripper_pub.publish("on")
 
-        print()
-
-        # if (
-        #     self.control_mode == self.ControlMode.SEMI
-        #     and self.bayesian_possibility > self.bayesian_threshold
-        # ):
-        #     rospy.loginfo("Bayesian Filter: Auto Control")
-        #     self.control_mode = self.ControlMode.AUTO
+                # Vacuum Gripper On
+                self.vacuum_gripper_state = True
+                vacuum_command = "on" if self.vacuum_gripper_state else "off"
+                self.vacuum_gripper_pub.publish(vacuum_command)
 
     def control(self):
         manual_input = self.manual_controller.get_control_input()
         auto_input = self.auto_controller.get_control_input()
 
-        possibility = self.bayesian_possibility
+        combined_input = [0.0] * 6
 
-        if (
-            self.control_mode == self.ControlMode.MANUAL
-            or self.control_mode == self.ControlMode.FORCE_CONTROL
-        ):
-            # 강제 수동 제어. 모든 입력을 수동 입력으로 변경
-            possibility = 0.0
+        if self.control_mode == self.ControlMode.MANUAL:
+            combined_input = manual_input
+
         elif self.control_mode == self.ControlMode.AUTO:
-            # 완전 제어. 모든 입력을 자동 입력으로 변경
-            possibility = 1.0
+            combined_input = auto_input
 
-        combined_input = possibility * auto_input + (1 - possibility) * manual_input
-
-        # print(f"Mode: {self.control_mode}, Possibility: {possibility}")
-        # print(combined_input)
+        elif self.control_mode == self.ControlMode.FORCE_CONTROL:
+            combined_input = manual_input
 
         self.rtde_c.speedL(combined_input, acceleration=0.25)
 

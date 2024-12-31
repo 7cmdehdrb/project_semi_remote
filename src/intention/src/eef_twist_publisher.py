@@ -19,7 +19,7 @@ class JacobianTwistCalculator:
 
         # Publisher
         self.twist_publisher = rospy.Publisher(
-            "/calculated_twist", Twist, queue_size=10
+            "/end_effector/twist", Twist, queue_size=10
         )
 
         # MoveIt Commander

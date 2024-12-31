@@ -115,7 +115,7 @@ class BayisianFilter:
 
 
 class BoxManager:
-    def __init__(self, topic: str = "/intention/real/pdf"):
+    def __init__(self, topic: str = "/box_objects/pdf"):
         # Box Subscriber
         self.sub = rospy.Subscriber(
             topic, BoxObjectMultiArrayWithPDF, callback=self.callback
@@ -195,7 +195,7 @@ class ManipulatorPathPlanner:
         )  # VGC를 엔드 이펙터로 취급하는 Pose
 
         # Box Manager
-        self.box_manager = BoxManager(topic="/intention/real/pdf")
+        self.box_manager = BoxManager(topic="/box_objects/pdf")
 
         # Bayisian Filter
         self.bayisian_filter = BayisianFilter()
@@ -442,8 +442,6 @@ class ManipulatorPathPlanner:
             self.bayisian_filter.get_best_object()
         )  # Get the best object
 
-        # best_object_id = 1
-
         if best_object_id == -1:
             rospy.logwarn("Cannot find the best object. Object ID: -1")
             return
@@ -454,6 +452,7 @@ class ManipulatorPathPlanner:
             rospy.logwarn(
                 "The best object pose is None. Object ID: {}".format(best_object_id)
             )
+            # 함수 중단용 return
             return
 
         linear_velocity = self.straight_planning(
@@ -492,8 +491,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
     try:
+        main()
         pass
     except rospy.ROSInterruptException as ros_ex:
         rospy.logfatal("ROS Interrupted.")
