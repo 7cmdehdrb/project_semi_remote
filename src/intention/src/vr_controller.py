@@ -155,6 +155,16 @@ class URControl:
         self.eef_distance = float("inf")
         self.eef_distance_threshold = 0.2
 
+        # Intersection Lenght
+        self.intersection_length_sub = rospy.Subscriber(
+            "/intention/intersection_length", Int32, self.intersection_length_callback
+        )
+        self.intersection_length = 0
+        self.intersection_length_threshold = 15
+
+    def intersection_length_callback(self, msg: Int32):
+        self.intersection_length = msg
+
     def distance_callback(self, msg: Float32):
         self.eef_distance = msg.data
 
@@ -195,9 +205,13 @@ class URControl:
 
         if self.control_mode == self.ControlMode.MANUAL:
             # 수동 제어 상태에서 베이지안 확률이 높고, 거리가 작으면 자동으로 전환
+            # if (
+            #     self.bayesian_possibility > self.bayesian_threshold
+            #     and self.eef_distance < self.eef_distance_threshold
+            # ):
             if (
                 self.bayesian_possibility > self.bayesian_threshold
-                and self.eef_distance < self.eef_distance_threshold
+                and self.intersection_length > self.intersection_length_threshold
             ):
                 rospy.loginfo("Bayesian Filter: Auto Control")
                 self.control_mode = self.ControlMode.AUTO

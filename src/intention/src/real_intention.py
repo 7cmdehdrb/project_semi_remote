@@ -440,7 +440,12 @@ def main():
     intention_publisher = rospy.Publisher(
         "/box_objects/pdf", BoxObjectMultiArrayWithPDF, queue_size=10
     )
+
     distance_publisher = rospy.Publisher("/intention/distance", Float32, queue_size=10)
+
+    intersection_publisher = rospy.Publisher(
+        "/intention/intersection_length", Int32, queue_size=10
+    )
 
     log_publisher = rospy.Publisher(
         "/intention/log/gaussian", PoseWithCovarianceStamped, queue_size=10
@@ -461,6 +466,7 @@ def main():
         # 문제가 있으면, 초기화된 메세지가 발행됨.
         intention_publisher.publish(intention.get_boxes_with_pdf())
         distance_publisher.publish(Float32(data=intention.distance))
+        intersection_publisher.publish(Int32(data=intention.intersections.shape[0]))
         log_publisher.publish(intention.pose_with_cov)
 
         r.sleep()
