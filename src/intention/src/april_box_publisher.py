@@ -36,7 +36,9 @@ class PositionAverageFilter:
         self.i = 0
         self.average = np.array([0.0, 0.0, 0.0])
 
-    def filter(self, data):
+    def filter(self, data, enable=True):
+        if not enable:
+            return data
         # 샘플 수 +1 (+1 the number of sample)
         self.i += 1
 
@@ -49,7 +51,6 @@ class PositionAverageFilter:
         # 평균 필터의 이전 상태값 업데이트 (update previous state value of average filter)
         self.average = average
 
-        return data
         return average
 
 
@@ -93,8 +94,8 @@ class AprilBoxPublisher:
         return pose_array
 
     def publish(self):
+        # Initialize the self.boxes
         if self.boxes is None:
-            # Initialize the boxes
             for tag in self.april_detector.tags.tags:
                 tag: BoxObjectWithPDF
                 self.filters[str(tag.id)] = PositionAverageFilter()
@@ -115,7 +116,8 @@ class AprilBoxPublisher:
                             tag.pose.position.y,
                             tag.pose.position.z,
                         ]
-                    )
+                    ),
+                    enable=False,
                 )
 
                 pose = Pose(
@@ -134,17 +136,19 @@ class AprilBoxPublisher:
             self.boxes = new_box_array
             self.april_box_pub.publish(self.boxes)
 
-            return None
+            return
 
         new_box_array = self.boxes
 
         existed_id = [box.id for box in self.boxes.boxes]
         new_id = [tag.id for tag in self.april_detector.tags.tags]
 
+        # 새로 인식된 ID (Newly recognized ID)
         newly_recognized_id = set(new_id) - set(existed_id)
 
         for tag in self.april_detector.tags.tags:
             if tag.id in newly_recognized_id:
+                # 새로운 박스를 추가 (Add new box)
                 avg_filter = PositionAverageFilter()
                 self.filters[str(tag.id)] = avg_filter
 
@@ -160,7 +164,8 @@ class AprilBoxPublisher:
                             tag.pose.position.y,
                             tag.pose.position.z,
                         ]
-                    )
+                    ),
+                    enable=False,
                 )
 
                 pose = Pose(
@@ -177,6 +182,7 @@ class AprilBoxPublisher:
                 new_box_array.boxes.append(new_box)
 
             else:
+                # 기존 박스의 위치 업데이트 (Update the position of the existing box)
                 for box in self.boxes.boxes:
                     if box.id == tag.id:
                         avg_filter = self.filters[str(tag.id)]
@@ -189,7 +195,8 @@ class AprilBoxPublisher:
                                     tag.pose.position.y,
                                     tag.pose.position.z,
                                 ]
-                            )
+                            ),
+                            enable=False,
                         )
 
                         pose = Pose(
@@ -203,10 +210,12 @@ class AprilBoxPublisher:
 
                         box.pose = pose
 
+        # self.boxes 인스턴스 업데이트
         self.boxes = new_box_array
 
         rospy.loginfo(f"Publishing {len(self.boxes.boxes)} boxes.")
 
+        # Publish the boxes
         self.april_box_pub.publish(self.boxes)
         self.april_pose_pub.publish(self.parse_box_object_to_posearray())
 

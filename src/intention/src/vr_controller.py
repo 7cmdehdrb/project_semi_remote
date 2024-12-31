@@ -27,7 +27,6 @@ from visualization_msgs.msg import *
 import rtde_control
 import rtde_receive
 from enum import Enum
-import time
 
 
 class MetaController:
@@ -139,7 +138,7 @@ class URControl:
             self.bayesian_filter_callback,
         )
         self.bayesian_possibility = 0.0
-        self.bayesian_threshold = 0.5
+        self.bayesian_threshold = 1.0
 
     def right_controller_joy_callback(self, msg: Joy):
         # 오른쪽 - [A, B, 중지, 검지]
@@ -197,7 +196,7 @@ def main():
     homing = False
 
     if homing:
-
+        # Home Position
         robot_control.rtde_c.moveJ(
             [
                 -3.1415770689593714,
@@ -208,25 +207,6 @@ def main():
                 3.141735315322876,
             ]
         )
-
-        home_tcp_pose = [
-            -0.27083100575785957,
-            0.13344653421177619,
-            0.1190586073329995,
-            -1.2214908956568804,
-            -1.228907826548365,
-            1.2008402405898584,
-        ]
-
-        target_pose = [
-            -0.9965229559475928 + 0.14,
-            -0.14247539224163633,
-            0.02680560979457672,
-            -1.2214908956568804,
-            -1.228907826548365,
-            1.2008402405898584,
-        ]
-
         rospy.spin()
 
     else:

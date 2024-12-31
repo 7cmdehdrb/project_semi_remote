@@ -86,7 +86,8 @@ class BayisianFilter:
         normalized_constant = self.get_normalized_constant(objects)
 
         if normalized_constant is None:
-            return None
+            rospy.logwarn("The normalized constant is None.")
+            return {}
 
         new_baysian_objects = {}
 
@@ -170,16 +171,16 @@ class ManipulatorPathPlanner:
             "/auto_controller/twist", Twist, queue_size=1
         )
 
-        self.robot = RobotCommander()
-        self.scene = PlanningSceneInterface()
-        self.group = MoveGroupCommander(move_group_name)
+        # self.robot = RobotCommander()
+        # self.scene = PlanningSceneInterface()
+        # self.group = MoveGroupCommander(move_group_name)
 
         """Moveit Parameter Group"""
         # self.group.set_planner_id("RRTConnectkConfigDefault")
-        self.group.set_num_planning_attempts(10)
+        # self.group.set_num_planning_attempts(10)
         # self.group.set_max_velocity_scaling_factor(0.1)
         # self.group.set_max_acceleration_scaling_factor(0.1)
-        self.group.set_pose_reference_frame("map")
+        # self.group.set_pose_reference_frame("map")
 
         self.trajectory = None
 
@@ -312,6 +313,8 @@ class ManipulatorPathPlanner:
 
         return poses
 
+    """
+
     def planning(self, target_pose: Pose, dt: float = 0.1) -> np.array:
         self.group.set_pose_target(target_pose)
 
@@ -377,7 +380,15 @@ class ManipulatorPathPlanner:
         rospy.logwarn("Planning failed.")
         return np.array([0.0, 0.0, 0.0])
 
-    def straight_planning(self, target_pose: Pose, v: float = 0.05) -> np.array:
+    """
+
+    def straight_planning(
+        self,
+        target_pose: Pose,
+        midpoint: float,
+        steepness: float = 40,
+    ) -> np.array:
+        """midpoint 근처에서 속도가 빠르게 감소해서 x축으로 도달하면 속도가 0이 되도록 계산합니다."""
         current_eef_pose = self.eef_state.get_target_frame_pose()
 
         if current_eef_pose is None:
@@ -411,10 +422,8 @@ class ManipulatorPathPlanner:
             return np.array([0.0, 0.0, 0.0])
 
         velocity_vector = (
-            (velocity_vector / distance)
-            * v
-            * ManipulatorPathPlanner.logistic(distance, 0.05, 40, 0.05, 1.0)
-        )
+            velocity_vector / distance
+        ) * ManipulatorPathPlanner.logistic(distance, midpoint, steepness, 0.05, 1.0)
 
         return velocity_vector
 
@@ -425,20 +434,23 @@ class ManipulatorPathPlanner:
 
         best_object_id, best_object_possibility = (
             self.bayisian_filter.get_best_object()
-        )  # Get the best object, Dictionary type
+        )  # Get the best object
 
-        best_object_id = 1
+        if best_object_id == -1:
+            rospy.logwarn("Cannot find the best object. Object ID: -1")
+            return
 
         best_object_pose = self.box_manager.get_pose(best_object_id)
 
         if best_object_pose is None:
-            rospy.logwarn("The best object pose is None.")
+            rospy.logwarn(
+                "The best object pose is None. Object ID: {}".format(best_object_id)
+            )
             return
 
-        linear_velocity = self.straight_planning(target_pose=best_object_pose, v=0.05)
-
-        # print("Linear Velocity: ", linear_velocity)
-        # print("Best Object Possibility: ", best_object_possibility)
+        linear_velocity = self.straight_planning(
+            target_pose=best_object_pose, midpoint=0.1, steepness=40
+        )  # 1.0으로 정규화된 속도
 
         # Publish the linear velocity
         linear_velocity_msg = Twist()
