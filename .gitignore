@@ -264,3 +264,6 @@ CATKIN_IGNORE
 
 /pcl-pcl-1.14.1
 *.tar.gz
+
+
+*.bag

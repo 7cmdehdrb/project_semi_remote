@@ -73,7 +73,7 @@ class BayisianFilter:
 
         if len(self.baysian_objects.items()) == 0:
             rospy.logwarn("The baysian objects are empty.")
-            return 1.0
+            return 0.0
 
         for id, possibility in self.baysian_objects.items():
             input_possibility = objects[str(id)]
@@ -83,10 +83,14 @@ class BayisianFilter:
 
     def filter(self, boxes: BoxObjectMultiArrayWithPDF):
         objects = self.parse_box_object_to_dict(boxes)
+        self.baysian_objects = objects
+
+        """
+        objects = self.parse_box_object_to_dict(boxes)
         normalized_constant = self.get_normalized_constant(objects)
 
-        if normalized_constant is None:
-            rospy.logwarn("The normalized constant is None.")
+        if normalized_constant == 0.0:
+            rospy.logwarn("The normalized constant is 0.0.")
             return {}
 
         new_baysian_objects = {}
@@ -99,6 +103,7 @@ class BayisianFilter:
         self.baysian_objects = new_baysian_objects
 
         return new_baysian_objects
+        """
 
     def get_best_object(self):
         if len(self.baysian_objects.items()) == 0:
@@ -134,10 +139,6 @@ class BoxManager:
             box: BoxObjectWithPDF
             total_pdf += box.pdf
 
-        if total_pdf == 0.0:
-            rospy.logwarn("The total pdf is zero.")
-            total_pdf = float("inf")
-
         for box in msg.boxes:
             box: BoxObjectWithPDF
 
@@ -145,7 +146,11 @@ class BoxManager:
 
             normalized_box.header = box.header
             normalized_box.id = box.id
-            normalized_box.pdf = box.pdf / total_pdf
+
+            if total_pdf == 0.0:
+                normalized_box.pdf = 1.0 / len(msg.boxes)
+            else:
+                normalized_box.pdf = box.pdf / total_pdf
 
             normalized_boxes.boxes.append(normalized_box)
 
@@ -404,11 +409,12 @@ class ManipulatorPathPlanner:
             ]
         )
 
+        z_offset = 0.04  # Funcking Magic Number
         target_pose_vector = np.array(
             [
                 target_pose.position.x,
                 target_pose.position.y,
-                target_pose.position.z,
+                target_pose.position.z + z_offset,
             ]
         )
 
@@ -418,7 +424,7 @@ class ManipulatorPathPlanner:
         x_distance = velocity_vector[0]
         distance = np.linalg.norm(velocity_vector)
 
-        if x_distance <= 0:
+        if x_distance <= 0.02:
             return np.array([0.0, 0.0, 0.0])
 
         velocity_vector = (
@@ -435,6 +441,8 @@ class ManipulatorPathPlanner:
         best_object_id, best_object_possibility = (
             self.bayisian_filter.get_best_object()
         )  # Get the best object
+
+        # best_object_id = 1
 
         if best_object_id == -1:
             rospy.logwarn("Cannot find the best object. Object ID: -1")
@@ -456,6 +464,10 @@ class ManipulatorPathPlanner:
         linear_velocity_msg = Twist()
         linear_velocity_msg.linear = Vector3(
             x=linear_velocity[0], y=linear_velocity[1], z=linear_velocity[2]
+        )
+
+        rospy.loginfo(
+            f"Best Object ID: {best_object_id}, Possibility: {best_object_possibility}"
         )
 
         # Publish the baysian possibility

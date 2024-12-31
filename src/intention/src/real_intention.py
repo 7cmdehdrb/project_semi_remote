@@ -226,17 +226,25 @@ class RealIntentionGaussian:
     def __init__(self):
         # Map 기준 Plane. TODO: Update plane automatically
         self.plane = Plane(
-            n=np.array([0.99887537, 0.0465492, 0.00900962]), d=-0.8969238154115642
+            # n=np.array([0.99887537, 0.0465492, 0.00900962]), d=-0.8969238154115642
+            n=np.array([0.99768449, 0.01408773, 0.0665371]),
+            d=-0.9447713826362829,
         )
 
         # Define EEF state
         self.eef_pose_state = State(topic=None, frame_id="VGC")
-        self.eef_twist_state = EEFTwistState(movegroup_name="manipulator")
+        # self.eef_twist_state = EEFTwistState(movegroup_name="manipulator")
+        self.eef_twist_sub = rospy.Subscriber(
+            "/calculated_twist", Twist, self.eef_twist_callback
+        )
+        self.eef_twist = Twist()
+
         self.box_manager = BoxManager(topic="/box_objects/raw")
 
         # 최종 이차원 평균 및 공분산
-        self.mean = np.array([0, 0])
+        self.mean = np.array([999.0, 999.0])
         self.cov = np.eye(2) * 999.9
+        self.distance = float("inf")
 
         # 누적되는 교차점 데이터
         self.intersections = np.empty((0, 3))
@@ -245,6 +253,10 @@ class RealIntentionGaussian:
         self.controller_sub = rospy.Subscriber(
             "/controller/right/joy", Joy, self.controller_callback
         )
+
+    def eef_twist_callback(self, msg: Twist):
+        """EEF 속도 메세지 콜백"""
+        self.eef_twist = msg
 
     def controller_callback(self, msg: Joy):
         """오른쪽 컨트롤러 조이스틱 메세지 콜백"""
@@ -263,22 +275,24 @@ class RealIntentionGaussian:
 
     def reset(self):
         """평균, 공분산, 교차점 데이터 초기화"""
-        self.mean = np.array([0, 0])
-        self.cov = np.eye(2)
+        self.mean = np.array([999.0, 999.0])
+        self.cov = np.eye(2) * 999.9
         self.intersections = np.empty((0, 3))
+        self.distance = float("inf")
 
     def calculate_mean_and_cov(self):
         """mean(np.array), cov(np.array) 리턴하는 함수. 자동적으로 내부에 self.mean, self.cov 업데이트, self.intersections 누적. 리턴 무시"""
         p = (
             self.eef_pose_state.get_target_frame_pose()
         )  # Map 프레임 상의 EEF 위치 계산, VGC
-        v = self.eef_twist_state.twist.linear
+        # v = self.eef_twist_state.twist.linear
+        v = self.eef_twist.linear
 
         if p is None:
             rospy.logwarn("No target frame pose")
             return None, None
 
-        test = True
+        test = False
 
         # TODO: Remove Test Code.
 
@@ -296,6 +310,12 @@ class RealIntentionGaussian:
             p = np.array([p.pose.position.x, p.pose.position.y, p.pose.position.z])
             v = np.array([v.x, v.y, v.z])
 
+        self.distance = self.plane.distance(p)
+
+        if np.isclose(np.linalg.norm(v), 0):
+            rospy.logwarn("No velocity")
+            return None, None
+
         # 교점 계산
         forward, intersection = (
             RealIntentionGaussian.IntersectionMethod.get_intersection_point(
@@ -304,15 +324,16 @@ class RealIntentionGaussian:
         )
 
         if np.isnan(intersection).any():
-            # rospy.logwarn("No intersection")
+            rospy.logwarn("No intersection")
             return None, None
 
         if not forward:
-            # rospy.logwarn("No forward intersection")
+            rospy.logwarn("No forward intersection")
             return None, None
 
         try:
-            intersection *= 1000.0  # m -> mm
+            # m -> mm
+            # intersection *= 1000.0
             self.intersections = np.vstack([self.intersections, intersection])
 
             mean, cov = (
@@ -356,7 +377,6 @@ class RealIntentionGaussian:
         rv = multivariate_normal(self.mean, self.cov, allow_singular=True)
 
         max_pdf = rv.pdf(self.mean)
-        max_pdf = max_pdf if max_pdf != 0.0 else float("inf")  # Avoid division by zero
 
         for box in self.box_manager.boxes_msg.boxes:
             box: BoxObjectWithPDF
@@ -368,11 +388,15 @@ class RealIntentionGaussian:
             )
 
             position_2d, _, _ = self.plane.project_to_plane(box_position)
-            pdf = rv.pdf(position_2d * 1000.0)  # m -> mm Scale
+            pdf = rv.pdf(position_2d)  # m -> mm Scale
 
             # Normalize PDF
             updated_box = box
-            updated_box.pdf = pdf / max_pdf
+            if max_pdf == 0:
+                updated_box.pdf = 1.0 / len(self.box_manager.boxes_msg.boxes)
+
+            else:
+                updated_box.pdf = pdf / max_pdf
 
             update_msg.boxes.append(box)
 
@@ -388,6 +412,9 @@ def main():
     intention_publisher = rospy.Publisher(
         "/intention/real/pdf", BoxObjectMultiArrayWithPDF, queue_size=10
     )
+    distance_publisher = rospy.Publisher(
+        "/intention/real/distance", Float32, queue_size=10
+    )
 
     # rospy.spin()
 
@@ -395,11 +422,18 @@ def main():
     while not rospy.is_shutdown():
 
         # Update mean and covariance
-        intention.calculate_mean_and_cov()
+        try:
+            intention.calculate_mean_and_cov()
+        except Exception as ex:
+            rospy.logwarn(ex)
 
+        rospy.loginfo(f"Mean: {intention.mean}")
+        rospy.loginfo(f"Num of Intersections: {len(intention.intersections)}")
+        #
         # Publish PDF
         # 문제가 있으면, 초기화된 메세지가 발행됨.
         intention_publisher.publish(intention.get_boxes_with_pdf())
+        distance_publisher.publish(Float32(data=intention.distance))
 
         r.sleep()
 

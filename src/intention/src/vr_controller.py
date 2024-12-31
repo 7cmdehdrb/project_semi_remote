@@ -65,6 +65,7 @@ class MetaController:
 
     def get_control_input(self) -> np.array:
         # 오른손 검지 버튼이 눌렸을 때만, 속도 명령 부여
+
         if self.right_controller_joy.buttons[3] == 1:
             linear_vel = self.right_controller_twist.linear
             return np.array([linear_vel.y, -linear_vel.x, linear_vel.z, 0.0, 0.0, 0.0])
@@ -81,6 +82,7 @@ class AutoController:
         )
 
         self.auto_controller_twist = Twist()
+        self.vacuum_trigger = False
 
     def auto_controller_callback(self, msg: Twist):
         self.auto_controller_twist = msg
@@ -91,8 +93,7 @@ class AutoController:
         forward_gain = 0.7
         lateral_gain = 2.0
 
-        # 정규화된 속도에 대한 제어 입력
-        return 0.1 * np.array(
+        velocity_matrix = np.array(
             [
                 -linear_vel.x * forward_gain,
                 -linear_vel.y * lateral_gain,
@@ -103,12 +104,18 @@ class AutoController:
             ]
         )
 
+        self.vacuum_trigger = np.isclose(np.linalg.norm(velocity_matrix), 0)
+
+        # 정규화된 속도에 대한 제어 입력
+        return 0.15 * velocity_matrix
+
 
 class URControl:
     class ControlMode(Enum):
         MANUAL = 0
         SEMI = 1
         AUTO = 2
+        FORCE_CONTROL = 3
 
     def __init__(self, hz: int = 30):
         self.hz = hz
@@ -124,12 +131,15 @@ class URControl:
         self.auto_controller = AutoController()
 
         # Control Mode
-        self.control_mode = self.ControlMode.AUTO
+        self.control_mode = self.ControlMode.MANUAL
 
         # Joy Stick
         self.right_controller_joy_sub = rospy.Subscriber(
             "/controller/right/joy", Joy, self.right_controller_joy_callback
         )
+
+        # Vacuum Gripper
+        self.vacuum_gripper_pub = rospy.Publisher("/vacuum", String, queue_size=10)
 
         # Bayisian Filter
         self.bayisian_filter_sub = rospy.Subscriber(
@@ -138,7 +148,16 @@ class URControl:
             self.bayesian_filter_callback,
         )
         self.bayesian_possibility = 0.0
-        self.bayesian_threshold = 1.0
+        self.bayesian_threshold = 0.5
+
+        self.distance_sub = rospy.Subscriber(
+            "/intention/real/distance", Float32, self.distance_callback
+        )
+        self.eef_distance = float("inf")
+        self.eef_distance_threshold = 0.2
+
+    def distance_callback(self, msg: Float32):
+        self.eef_distance = msg.data
 
     def right_controller_joy_callback(self, msg: Joy):
         # 오른쪽 - [A, B, 중지, 검지]
@@ -146,24 +165,54 @@ class URControl:
             rospy.logwarn("Invalid Right Controller Joy Message")
             return None
 
+        if msg.buttons[1] == 1:
+            self.vacuum_gripper_pub.publish("off")
+
         if msg.buttons[2] == 1:
             # 중지 버튼이 눌렸을 때, 강제 수동 제어
-            rospy.loginfo("Manual Control")
-            self.control_mode = self.ControlMode.MANUAL
+
+            if self.control_mode == self.ControlMode.AUTO:
+                rospy.loginfo("Change to Force Control")
+                self.control_mode = self.ControlMode.FORCE_CONTROL
 
         else:
-            # 중지 버튼이 눌리지 않았을 때, 반자율 제어
-            self.control_mode = self.ControlMode.SEMI
+            if self.control_mode == self.ControlMode.FORCE_CONTROL:
+                self.control_mode = self.ControlMode.MANUAL
 
     def bayesian_filter_callback(self, msg: Float32):
         self.bayesian_possibility = msg.data
 
-        if (
-            self.control_mode == self.ControlMode.SEMI
-            and self.bayesian_possibility > self.bayesian_threshold
-        ):
-            rospy.loginfo("Bayesian Filter: Auto Control")
-            self.control_mode = self.ControlMode.AUTO
+        print(self.control_mode)
+
+        if self.control_mode == self.ControlMode.MANUAL:
+
+            print(
+                "Bayesian: ",
+                round(self.bayesian_possibility, 3),
+                round(self.bayesian_threshold, 3),
+            )
+            print(
+                "Distance: ",
+                round(self.eef_distance, 3),
+                round(self.eef_distance_threshold, 3),
+            )
+
+            if (
+                self.bayesian_possibility > self.bayesian_threshold
+                and self.eef_distance < self.eef_distance_threshold
+            ):
+                rospy.loginfo("Bayesian Filter: Auto Control")
+                self.control_mode = self.ControlMode.AUTO
+                self.vacuum_gripper_pub.publish("on")
+
+        print()
+
+        # if (
+        #     self.control_mode == self.ControlMode.SEMI
+        #     and self.bayesian_possibility > self.bayesian_threshold
+        # ):
+        #     rospy.loginfo("Bayesian Filter: Auto Control")
+        #     self.control_mode = self.ControlMode.AUTO
 
     def control(self):
         manual_input = self.manual_controller.get_control_input()
@@ -171,7 +220,10 @@ class URControl:
 
         possibility = self.bayesian_possibility
 
-        if self.control_mode == self.ControlMode.MANUAL:
+        if (
+            self.control_mode == self.ControlMode.MANUAL
+            or self.control_mode == self.ControlMode.FORCE_CONTROL
+        ):
             # 강제 수동 제어. 모든 입력을 수동 입력으로 변경
             possibility = 0.0
         elif self.control_mode == self.ControlMode.AUTO:
@@ -180,8 +232,8 @@ class URControl:
 
         combined_input = possibility * auto_input + (1 - possibility) * manual_input
 
-        print(f"Mode: {self.control_mode}, Possibility: {possibility}")
-        print(combined_input)
+        # print(f"Mode: {self.control_mode}, Possibility: {possibility}")
+        # print(combined_input)
 
         self.rtde_c.speedL(combined_input, acceleration=0.25)
 
@@ -230,7 +282,7 @@ if __name__ == "__main__":
     except Exception as ex:
         rospy.logfatal("Exception occurred.")
         rospy.logfatal(ex)
-    # finally:
-    #     rospy.loginfo("Shutting down.")
-    #     rospy.signal_shutdown("Shutting down.")
-    #     sys.exit(0)
+    finally:
+        rospy.loginfo("Shutting down.")
+        rospy.signal_shutdown("Shutting down.")
+        sys.exit(0)
