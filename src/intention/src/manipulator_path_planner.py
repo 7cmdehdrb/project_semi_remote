@@ -71,6 +71,10 @@ class BayisianFilter:
 
         normanlized_constant = 0.0
 
+        if len(self.baysian_objects.items()) == 0:
+            rospy.logwarn("The baysian objects are empty.")
+            return 1.0
+
         for id, possibility in self.baysian_objects.items():
             input_possibility = objects[str(id)]
             normanlized_constant += input_possibility * possibility
@@ -403,14 +407,14 @@ class ManipulatorPathPlanner:
         x_distance = velocity_vector[0]
         distance = np.linalg.norm(velocity_vector)
 
+        if x_distance <= 0:
+            return np.array([0.0, 0.0, 0.0])
+
         velocity_vector = (
             (velocity_vector / distance)
             * v
             * ManipulatorPathPlanner.logistic(distance, 0.05, 40, 0.05, 1.0)
         )
-
-        if x_distance < 0:
-            velocity_vector = np.array([0.0, 0.0, 0.0])
 
         return velocity_vector
 
@@ -464,8 +468,8 @@ def main():
 
 
 if __name__ == "__main__":
+    main()
     try:
-        main()
         pass
     except rospy.ROSInterruptException as ros_ex:
         rospy.logfatal("ROS Interrupted.")

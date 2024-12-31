@@ -92,7 +92,8 @@ class AutoController:
         forward_gain = 0.7
         lateral_gain = 2.0
 
-        return np.array(
+        # 정규화된 속도에 대한 제어 입력
+        return 0.1 * np.array(
             [
                 -linear_vel.x * forward_gain,
                 -linear_vel.y * lateral_gain,
