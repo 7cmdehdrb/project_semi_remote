@@ -231,6 +231,7 @@ class RealIntentionGaussian:
             n=np.array([0.99768449, 0.01408773, 0.0665371]),
             d=-0.9447713826362829,
         )
+        self.scale = 1.0
 
         # Define EEF state
         self.eef_pose_state = State(topic=None, frame_id="VGC")
@@ -349,7 +350,7 @@ class RealIntentionGaussian:
 
         try:
             # m -> mm
-            # intersection *= 1000.0
+            intersection *= self.scale
             self.intersections = np.vstack([self.intersections, intersection])
 
             mean, cov = (
@@ -410,6 +411,9 @@ class RealIntentionGaussian:
             )
 
             position_2d, _, _ = self.plane.project_to_plane(box_position)
+
+            position_2d *= self.scale
+
             pdf = rv.pdf(position_2d)
 
             # Normalize PDF

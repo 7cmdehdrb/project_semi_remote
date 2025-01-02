@@ -89,11 +89,10 @@ class AutoController:
     def auto_controller_callback(self, msg: Twist):
         self.auto_controller_twist = msg
 
-    def get_control_input(self, v: float = 0.15) -> np.array:
+    def get_control_input(
+        self, v: float = 0.15, forward_gain: float = 1.0, lateral_gain: float = 1.0
+    ) -> np.array:
         linear_vel = self.auto_controller_twist.linear
-
-        forward_gain = 1.0
-        lateral_gain = 2.2
 
         velocity_matrix = np.array(
             [
@@ -152,6 +151,8 @@ class URControl:
             "/auto_controller/bayisian_success", Bool, self.bayesian_success_callback
         )
 
+        self.triggered_time = rospy.Time.now()
+
         # @@@@@@@@@ Subscribers @@@@@@@@@
 
         # Distance Subscriber : 거리가 임계점보다 가까우면 자동 제어로 전환
@@ -169,7 +170,7 @@ class URControl:
             if is_success:
                 self.control_mode = self.ControlMode.AUTO
 
-                rospy.loginfo("Bayesian Filter: Auto Control")
+                rospy.loginfo("Mode Change: Auto - Bayesian Success")
 
                 # 그리퍼를 ON 상태로 변경
                 self.vacuum_gripper_state = True
@@ -179,7 +180,7 @@ class URControl:
             elif not is_success and self.eef_distance < self.eef_distance:
                 self.control_mode = self.ControlMode.AUTO
 
-                rospy.loginfo("Distance: Auto Control")
+                rospy.loginfo("Mode Change: Auto - Distance Threshold")
 
                 # 그리퍼를 ON 상태로 변경
                 self.vacuum_gripper_state = True
@@ -210,34 +211,57 @@ class URControl:
             vacuum_command = "on" if self.vacuum_gripper_state else "off"
             self.vacuum_gripper_pub.publish(vacuum_command)
 
+            rospy.loginfo("Mode Change: Homeing")
+
             self.control_mode = self.ControlMode.HOMING
+            self.triggered_time = rospy.Time.now()
 
         # 중지 버튼이 눌렸을 때
         if msg.buttons[2] == 1:
             # 강제 수동 제어 상태로 변경
-            rospy.loginfo("Change to Force Control")
+
+            rospy.loginfo("Mode Change: Force Control")
+
             self.control_mode = self.ControlMode.FORCE_CONTROL
 
         # 중지 버튼이 눌리지 않았을 때, 강제 수동 제어 해제
         else:
             if self.control_mode == self.ControlMode.FORCE_CONTROL:
+
+                rospy.loginfo("Mode Change: Manual")
+
                 self.control_mode = self.ControlMode.MANUAL
 
     def control(self):
         # 리셋 상태일 때, 상태를 1회 발행하고 수동 제어 상태로 변경
         if self.control_mode == self.ControlMode.RESET:
+
+            rospy.loginfo("Mode Change: Manual")
+
             self.control_mode_pub.publish(UInt16(data=self.control_mode.value))
             self.control_mode = self.ControlMode.MANUAL
 
         # Homing 상태일 때, 로봇을 초기 위치로 이동(planner에 의해 처리), 이동이 끝나면 RESET 상태로 변경
         elif self.control_mode == self.ControlMode.HOMING:
-            is_running, homing_input = self.auto_controller.get_control_input(v=0.3)
+            current_time = rospy.Time.now()
 
-            if is_running:
-                self.rtde_c.speedL(homing_input, acceleration=0.25)
+            if (current_time - self.triggered_time).to_sec() < 1.0:
+                # X로 뒤로 0.05m/s 로 2초간 이동
+                homing_input = [0.05, 0.0, 0.0, 0.0, 0.0, 0.0]
 
             else:
-                self.control_mode = self.ControlMode.RESET
+                is_running, homing_input = self.auto_controller.get_control_input(v=0.1)
+
+                if is_running:
+                    # 속도가 0이 아니라면 명령 수행
+                    self.rtde_c.speedL(homing_input, acceleration=0.25)
+
+                else:
+                    # 속도가 0이라면 RESET 상태로 변경
+
+                    rospy.loginfo("Mode Change: Reset")
+
+                    self.control_mode = self.ControlMode.RESET
 
         # 수동, 자동, 강제 수동 제어 상태일 때, 로봇을 제어
         else:
@@ -246,13 +270,17 @@ class URControl:
             if (
                 self.control_mode == self.ControlMode.MANUAL
                 or self.control_mode == self.ControlMode.FORCE_CONTROL
+                or self.control_mode == self.ControlMode.HOMING
             ):
                 # 수동 제어 상태에서는 메타 컨트롤러로부터 제어 입력을 받음
                 _, combined_input = self.manual_controller.get_control_input()
 
             elif self.control_mode == self.ControlMode.AUTO:
                 # 자동 제어 상태에서는 자동 컨트롤러로부터 제어 입력을 받음
-                _, combined_input = self.auto_controller.get_control_input()
+
+                _, combined_input = self.auto_controller.get_control_input(
+                    v=0.15, forward_gain=1.0, lateral_gain=2.0
+                )
 
             # 로봇에 속도 명령을 부여
             self.rtde_c.speedL(combined_input, acceleration=0.25)

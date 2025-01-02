@@ -47,7 +47,9 @@ except roslib.exceptions.ROSLibException:
 class BayisianFilter:
     def __init__(self):
         self.baysian_objects = {}
-        self.small_value = 1e-10
+        self.small_value = 0.1
+
+        self.hz = 10.0
 
         self.intersection_length_sub = rospy.Subscriber(
             "/intention/intersection_length", Int32, self.intersection_length_callback
@@ -65,9 +67,7 @@ class BayisianFilter:
         for box in normalized_boxes.boxes:
             box: BoxObjectWithPDF
 
-            baysian_objects[str(box.id)] = (
-                self.small_value if box.pdf == 0.0 else box.pdf
-            )
+            baysian_objects[str(box.id)] = np.clip(box.pdf, self.small_value, 1.0)
 
         # 정규화
         normalized_constant = sum(baysian_objects.values())
@@ -75,9 +75,7 @@ class BayisianFilter:
         for id, possibility in baysian_objects.items():
             baysian_objects[str(id)] = possibility / normalized_constant
 
-        self.baysian_objects = baysian_objects
-
-        return self.baysian_objects
+        return baysian_objects
 
     def filter(
         self,
@@ -87,8 +85,61 @@ class BayisianFilter:
         if ignore:
             # 베이지안 확률을 사용하지 않고, 정규화된 PDF를 그대로 사용할 때
             objects = self.parse_box_object_to_dict(boxes)
-            self.baysian_objects = objects
-            return objects
+            objects: dict
+
+            new_baysian_objects = {}
+
+            # 정규화 상수 계산
+            normalized_constant = sum([float(value) for value in objects.values()])
+
+            if len(self.baysian_objects.items()) == 0:
+                # 초기화
+                for id, possibility in objects.items():
+                    new_baysian_objects[str(id)] = {
+                        "possibility": self.small_value,
+                        "integral": 0.0,
+                    }
+
+                self.baysian_objects = new_baysian_objects
+
+                return self.baysian_objects
+
+            # 기존 오브젝트들에 대해 확률 업데이트
+            for id, value in self.baysian_objects.items():
+                input_possibility = objects[str(id)]
+
+                possibility = float(value["possibility"])
+                integral = float(value["integral"])
+
+                new_possibility = input_possibility
+
+                new_integral = (
+                    integral + (new_possibility) * 0.1
+                )  # 적분값 업데이트. 시간 간격은 0.1
+
+                new_baysian_objects[str(id)] = {
+                    "possibility": float(new_possibility),
+                    "integral": float(new_integral),
+                }
+
+            self.baysian_objects = new_baysian_objects
+
+            # print(
+            #     f"Possibility: ",
+            #     [
+            #         round(float(value["possibility"]), 3)
+            #         for value in new_baysian_objects.values()
+            #     ],
+            # )
+            # print(
+            #     f"Integral: ",
+            #     [
+            #         round(float(value["integral"]), 3)
+            #         for value in new_baysian_objects.values()
+            #     ],
+            # )
+
+            return self.baysian_objects
 
         # 새로 업데이트 되는 확률들
         objects = self.parse_box_object_to_dict(boxes)
@@ -103,7 +154,7 @@ class BayisianFilter:
 
         # 새로운 오브젝트들에 대한 초기 확률 설정 및 확률 업데이트
         for id in new_defined_list:
-            input_possibility = (1.0 / len(combined_list)) * objects[str(id)]
+            input_possibility = 1.0 / len(combined_list)
             new_baysian_objects[str(id)] = {
                 "possibility": float(input_possibility),
                 "integral": 0.0,
@@ -125,22 +176,29 @@ class BayisianFilter:
             }
 
         # 정규화 상수 계산
-        normalized_constant = sum(new_baysian_objects.values())
+        normalized_constant = sum(
+            [float(value["possibility"]) for value in new_baysian_objects.values()]
+        )
+
+        dt = 1.0 / self.hz
 
         # 정규화된 확률로 업데이트, 적분 업데이트. 교차점 수가 적은 경우 강제로 확률 값을 낮춤
         for id, value in new_baysian_objects.items():
             possibility = float(value["possibility"])
             integral = float(value["integral"])
 
-            if self.intersection_length < 10:
-                normalized_possibility = self.small_value
-            else:
-                normalized_possibility = possibility / normalized_constant
+            # 초반 1초 값은 베이지안 필터에 반영하지 않음
+            # if self.intersection_length < int(self.hz):
+            #     normalized_possibility = self.small_value
+            # else:
+            #     normalized_possibility = possibility / normalized_constant
+
+            normalized_possibility = possibility / normalized_constant
 
             new_baysian_objects[str(id)] = {
                 "possibility": normalized_possibility,
                 "integral": integral
-                + (normalized_possibility) * 0.1,  # 적분값 업데이트. 시간 간격은 0.1
+                + (normalized_possibility) * dt,  # 적분값 업데이트. 시간 간격은 0.1
             }
 
         self.baysian_objects = new_baysian_objects
@@ -154,7 +212,7 @@ class BayisianFilter:
         self,
     ):
         if len(self.baysian_objects.items()) == 0:
-            rospy.logwarn("The baysian objects are empty.")
+            # rospy.logwarn("The baysian objects are empty.")
             return -1, 0.0
 
         # 1. 확률이 0.9 이상인 경우 ID 반환
@@ -162,13 +220,26 @@ class BayisianFilter:
             self.baysian_objects, key=lambda x: self.baysian_objects[x]["possibility"]
         )
         best_object_possibility = float(
-            self.baysian_objects[best_object_id]["possibility"]
+            self.baysian_objects[str(best_object_id)]["possibility"]
         )
 
-        if best_object_possibility >= 0.9:
+        print(round(best_object_possibility, 3))
+
+        # 확률이 0.9 이상이고, 교차점이 1초 이상인 경우 반환
+        if best_object_possibility >= 0.9 and self.intersection_length > int(
+            self.hz * 1.0
+        ):
+            rospy.loginfo(f"최고 확률 임계: {best_object_possibility}")
             return int(best_object_id), True
 
-        # 2. 가장 높은 적분 값과 차상의 적분 값의 차이가 0.2 이상인 경우 ID 반환
+        # 3초 이상 교차점이 있을 때, 확률이 0.5 이상인 경우 반환
+        if best_object_possibility >= 0.5 and self.intersection_length > int(
+            self.hz * 3.0
+        ):
+            rospy.loginfo(f"최고 확률 임계 및 교차점 만족: {best_object_possibility}")
+            return int(best_object_id), True
+
+        # 가장 높은 적분 값과 차상의 적분 값의 차이가 1.5 이상인 경우 반환
         sorted_objects = sorted(
             self.baysian_objects.items(), key=lambda x: x[1]["integral"], reverse=True
         )
@@ -179,13 +250,11 @@ class BayisianFilter:
         _ = int(sorted_objects[1][0])
         second_object_integral = float(sorted_objects[1][1]["integral"])
 
-        if best_object_integral - second_object_integral > 0.2:
-            # 적분값 차이가 0.2 이상. 대충 1초동안 확률이 0.2 이상 차이가 났다고 간주함
+        if best_object_integral - second_object_integral > 1.5:
+            rospy.loginfo(
+                f"적분값 차이 임계: {best_object_integral - second_object_integral}"
+            )
             return int(best_object_id_by_integral), True
-
-        # 3. 그 외의 경우, 순간 확률이 0.5 이상인 경우 ID 반환, Flase
-        if best_object_possibility >= 0.5:
-            return int(best_object_id), False
 
         # 4. 그 외의 경우, 실패
         return -1, False
@@ -207,7 +276,7 @@ class BoxManager:
 
         for callback in self.callbacks:
             callback: callable
-            callback(msg)
+            callback(msg, ignore=False)
 
     def get_pose(self, id: int):
         if id == -1:
@@ -215,7 +284,9 @@ class BoxManager:
 
         if id == -2:
             return Pose(
-                position=Point(x=0.0, y=0.0, z=0.0),
+                position=Point(
+                    x=0.409971536841809, y=-0.13331905253904977, z=0.1163856447241224
+                ),
                 orientation=Quaternion(x=0.0, y=0.0, z=0.0, w=1.0),
             )
 
@@ -408,7 +479,7 @@ class ManipulatorPathPlanner:
             ]
         )
 
-        z_offset = 0.04  # Funcking Magic Number
+        z_offset = 0.00  # Funcking Magic Number
         target_pose_vector = np.array(
             [
                 target_pose.position.x,
@@ -421,9 +492,9 @@ class ManipulatorPathPlanner:
         velocity_vector = target_pose_vector - current_eef_pose_vector
 
         x_distance = velocity_vector[0]
-        distance = np.linalg.norm(velocity_vector)
+        distance = np.abs(np.linalg.norm(velocity_vector))
 
-        if x_distance <= 0.04:
+        if np.abs(x_distance) <= 0.04:
             return np.array([0.0, 0.0, 0.0])
 
         velocity_vector = (
@@ -449,7 +520,7 @@ class ManipulatorPathPlanner:
 
         elif self.control_mode == URControl.ControlMode.HOMING:
             # 홈 모드일 때는 best_object_id를 -2로 설정하고, 베이지안 필터를 초기화함
-            self.bayisian_filter.reset()
+            # self.bayisian_filter.reset()
             self.best_object_id = -2
             self.is_success = False
 
@@ -457,7 +528,7 @@ class ManipulatorPathPlanner:
         best_object_pose = self.box_manager.get_pose(self.best_object_id)
 
         if best_object_pose is None:
-            rospy.logwarn("Cannot Find Best Object: {}".format(self.best_object_id))
+            # rospy.logwarn("Cannot Find Best Object: {}".format(self.best_object_id))
             return
 
         linear_velocity = self.straight_planning(

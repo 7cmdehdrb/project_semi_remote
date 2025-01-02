@@ -143,6 +143,8 @@ class AprilBoxPublisher:
         existed_id = [box.id for box in self.boxes.boxes]
         new_id = [tag.id for tag in self.april_detector.tags.tags]
 
+        rospy.loginfo(f"Detected Tags: {len(new_id)}")
+
         # 새로 인식된 ID (Newly recognized ID)
         newly_recognized_id = set(new_id) - set(existed_id)
 
@@ -213,7 +215,7 @@ class AprilBoxPublisher:
         # self.boxes 인스턴스 업데이트
         self.boxes = new_box_array
 
-        rospy.loginfo(f"Publishing {len(self.boxes.boxes)} boxes.")
+        # rospy.loginfo(f"Publishing {len(self.boxes.boxes)} boxes.")
 
         # Publish the boxes
         self.april_box_pub.publish(self.boxes)
