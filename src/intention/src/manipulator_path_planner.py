@@ -34,9 +34,11 @@ from moveit_msgs.srv import (
 from moveit_msgs.msg import RobotTrajectory, DisplayTrajectory, PlanningScene
 from trajectory_msgs.msg import JointTrajectoryPoint
 
+
 try:
     sys.path.append(roslib.packages.get_pkg_dir("base_package") + "/src")
     from state import State, EEFTwistState
+    from vr_controller import URControl
 except roslib.exceptions.ROSLibException:
     rospy.logfatal("Cannot find package test_package")
     sys.exit(1)
@@ -45,118 +47,178 @@ except roslib.exceptions.ROSLibException:
 class BayisianFilter:
     def __init__(self):
         self.baysian_objects = {}
+        self.small_value = 1e-10
+
+        self.intersection_length_sub = rospy.Subscriber(
+            "/intention/intersection_length", Int32, self.intersection_length_callback
+        )
+        self.intersection_length = 0
+
+    def intersection_length_callback(self, msg: Int32):
+        self.intersection_length = msg.data
 
     def parse_box_object_to_dict(self, normalized_boxes: BoxObjectMultiArrayWithPDF):
+        # Max PDF에 대하여 정규화된 값. 이 값을 다시 정규화하여 사용해야 함.
         baysian_objects = {}
 
+        # 딕셔너리로 전환
         for box in normalized_boxes.boxes:
             box: BoxObjectWithPDF
 
-            baysian_objects[str(box.id)] = float(box.pdf)
+            baysian_objects[str(box.id)] = (
+                self.small_value if box.pdf == 0.0 else box.pdf
+            )
+
+        # 정규화
+        normalized_constant = sum(baysian_objects.values())
+
+        for id, possibility in baysian_objects.items():
+            baysian_objects[str(id)] = possibility / normalized_constant
 
         self.baysian_objects = baysian_objects
 
         return self.baysian_objects
 
-    def get_normalized_constant(self, objects: dict):
+    def filter(
+        self,
+        boxes: BoxObjectMultiArrayWithPDF,
+        ignore: bool = False,
+    ):
+        if ignore:
+            # 베이지안 확률을 사용하지 않고, 정규화된 PDF를 그대로 사용할 때
+            objects = self.parse_box_object_to_dict(boxes)
+            self.baysian_objects = objects
+            return objects
 
-        if len(self.baysian_objects.items()) < len(objects.items()):
-            """목표 객체의 개수가 변했을 때. 줄어드는 경우는 넘겨주는 레벨에서 잘못한 것임."""
-            rospy.logwarn("The number of objects has changed.")
-
-            reseted_baysian_objects = {
-                {str(id): (1.0 / len(objects.items()))} for id in objects.keys()
-            }
-            self.baysian_objects = reseted_baysian_objects
-
-        normanlized_constant = 0.0
-
-        if len(self.baysian_objects.items()) == 0:
-            rospy.logwarn("The baysian objects are empty.")
-            return 0.0
-
-        for id, possibility in self.baysian_objects.items():
-            input_possibility = objects[str(id)]
-            normanlized_constant += input_possibility * possibility
-
-        return normanlized_constant
-
-    def filter(self, boxes: BoxObjectMultiArrayWithPDF):
+        # 새로 업데이트 되는 확률들
         objects = self.parse_box_object_to_dict(boxes)
-        self.baysian_objects = objects
+        objects: dict
 
-        """
-        objects = self.parse_box_object_to_dict(boxes)
-        normalized_constant = self.get_normalized_constant(objects)
-
-        if normalized_constant == 0.0:
-            rospy.logwarn("The normalized constant is 0.0.")
-            return {}
-
+        # 초기화
         new_baysian_objects = {}
 
-        for id, possibility in self.baysian_objects.items():
+        # 새로운 오브젝트의 ID 리스트
+        new_defined_list = list(set(objects.keys()) - set(self.baysian_objects.keys()))
+        combined_list = list(set(objects.keys()) | set(self.baysian_objects.keys()))
+
+        # 새로운 오브젝트들에 대한 초기 확률 설정 및 확률 업데이트
+        for id in new_defined_list:
+            input_possibility = (1.0 / len(combined_list)) * objects[str(id)]
+            new_baysian_objects[str(id)] = {
+                "possibility": float(input_possibility),
+                "integral": 0.0,
+            }
+
+        # 기존 오브젝트들에 대해 확률 업데이트, 적분 유지
+        for id, value in self.baysian_objects.items():
             input_possibility = objects[str(id)]
-            new_possibility = (input_possibility * possibility) / normalized_constant
-            new_baysian_objects[str(id)] = float(new_possibility)
+
+            possibility = float(value["possibility"])
+            integral = float(value["integral"])
+
+            new_possibility = input_possibility * possibility
+            new_integral = integral
+
+            new_baysian_objects[str(id)] = {
+                "possibility": float(new_possibility),
+                "integral": float(new_integral),
+            }
+
+        # 정규화 상수 계산
+        normalized_constant = sum(new_baysian_objects.values())
+
+        # 정규화된 확률로 업데이트, 적분 업데이트. 교차점 수가 적은 경우 강제로 확률 값을 낮춤
+        for id, value in new_baysian_objects.items():
+            possibility = float(value["possibility"])
+            integral = float(value["integral"])
+
+            if self.intersection_length < 10:
+                normalized_possibility = self.small_value
+            else:
+                normalized_possibility = possibility / normalized_constant
+
+            new_baysian_objects[str(id)] = {
+                "possibility": normalized_possibility,
+                "integral": integral
+                + (normalized_possibility) * 0.1,  # 적분값 업데이트. 시간 간격은 0.1
+            }
 
         self.baysian_objects = new_baysian_objects
 
         return new_baysian_objects
-        """
 
-    def get_best_object(self):
+    def reset(self):
+        self.baysian_objects = {}
+
+    def get_best_object(
+        self,
+    ):
         if len(self.baysian_objects.items()) == 0:
             rospy.logwarn("The baysian objects are empty.")
             return -1, 0.0
 
-        best_object_id = max(self.baysian_objects, key=self.baysian_objects.get)
-        return int(best_object_id), float(self.baysian_objects[best_object_id])
+        # 1. 확률이 0.9 이상인 경우 ID 반환
+        best_object_id = max(
+            self.baysian_objects, key=lambda x: self.baysian_objects[x]["possibility"]
+        )
+        best_object_possibility = float(
+            self.baysian_objects[best_object_id]["possibility"]
+        )
+
+        if best_object_possibility >= 0.9:
+            return int(best_object_id), True
+
+        # 2. 가장 높은 적분 값과 차상의 적분 값의 차이가 0.2 이상인 경우 ID 반환
+        sorted_objects = sorted(
+            self.baysian_objects.items(), key=lambda x: x[1]["integral"], reverse=True
+        )
+
+        best_object_id_by_integral = int(sorted_objects[0][0])
+        best_object_integral = float(sorted_objects[0][1]["integral"])
+
+        _ = int(sorted_objects[1][0])
+        second_object_integral = float(sorted_objects[1][1]["integral"])
+
+        if best_object_integral - second_object_integral > 0.2:
+            # 적분값 차이가 0.2 이상. 대충 1초동안 확률이 0.2 이상 차이가 났다고 간주함
+            return int(best_object_id_by_integral), True
+
+        # 3. 그 외의 경우, 순간 확률이 0.5 이상인 경우 ID 반환, Flase
+        if best_object_possibility >= 0.5:
+            return int(best_object_id), False
+
+        # 4. 그 외의 경우, 실패
+        return -1, False
 
 
 class BoxManager:
-    def __init__(self, topic: str = "/box_objects/pdf"):
+    def __init__(self, topic: str = "/box_objects/pdf", callbacks: list = []):
         # Box Subscriber
         self.sub = rospy.Subscriber(
             topic, BoxObjectMultiArrayWithPDF, callback=self.callback
         )
 
         self.boxes_msg = BoxObjectMultiArrayWithPDF()
-        self.normalized_boxes = BoxObjectMultiArrayWithPDF()
+        self.callbacks = callbacks
 
     def callback(self, msg: BoxObjectMultiArrayWithPDF):
+        # Max PDF 에 대하여 정규화 된 값이 들어옴. Intersection이 업데이트 될 때 반응함.
         self.boxes_msg = msg
-        self.normalized_boxes = self.normaize(msg)
 
-    def normaize(self, msg: BoxObjectMultiArrayWithPDF):
-        normalized_boxes = BoxObjectMultiArrayWithPDF()
-
-        normalized_boxes.header = msg.header
-
-        total_pdf = 0.0
-
-        for box in msg.boxes:
-            box: BoxObjectWithPDF
-            total_pdf += box.pdf
-
-        for box in msg.boxes:
-            box: BoxObjectWithPDF
-
-            normalized_box = BoxObjectWithPDF()
-
-            normalized_box.header = box.header
-            normalized_box.id = box.id
-
-            if total_pdf == 0.0:
-                normalized_box.pdf = 1.0 / len(msg.boxes)
-            else:
-                normalized_box.pdf = box.pdf / total_pdf
-
-            normalized_boxes.boxes.append(normalized_box)
-
-        return normalized_boxes
+        for callback in self.callbacks:
+            callback: callable
+            callback(msg)
 
     def get_pose(self, id: int):
+        if id == -1:
+            return None
+
+        if id == -2:
+            return Pose(
+                position=Point(x=0.0, y=0.0, z=0.0),
+                orientation=Quaternion(x=0.0, y=0.0, z=0.0, w=1.0),
+            )
+
         for box in self.boxes_msg.boxes:
             box: BoxObjectWithPDF
 
@@ -176,32 +238,38 @@ class ManipulatorPathPlanner:
             "/auto_controller/twist", Twist, queue_size=1
         )
 
-        # self.robot = RobotCommander()
-        # self.scene = PlanningSceneInterface()
-        # self.group = MoveGroupCommander(move_group_name)
-
-        """Moveit Parameter Group"""
-        # self.group.set_planner_id("RRTConnectkConfigDefault")
-        # self.group.set_num_planning_attempts(10)
-        # self.group.set_max_velocity_scaling_factor(0.1)
-        # self.group.set_max_acceleration_scaling_factor(0.1)
-        # self.group.set_pose_reference_frame("map")
-
-        self.trajectory = None
+        self.control_mode = URControl.ControlMode.MANUAL
+        self.best_object_id = -1
+        self.is_success = False
 
         # EEF State
         self.eef_state = State(
             topic=None, frame_id="VGC"
         )  # VGC를 엔드 이펙터로 취급하는 Pose
 
-        # Box Manager
-        self.box_manager = BoxManager(topic="/box_objects/pdf")
-
         # Bayisian Filter
         self.bayisian_filter = BayisianFilter()
 
-        # Joint Converter
-        self.joint_order = EEFTwistState.JointOrder()
+        # Box Manager
+        self.box_manager = BoxManager(
+            topic="/box_objects/pdf", callbacks=[self.bayisian_filter.filter]
+        )
+
+        # Control Mode Subscriber
+        self.control_mode_sub = rospy.Subscriber(
+            "/control_mode", UInt16, self.control_mode_callback
+        )
+        self.bayisian_success_pub = rospy.Publisher(
+            "/auto_controller/bayisian_success", Bool, queue_size=1
+        )
+
+    def control_mode_callback(self, msg: UInt16):
+        # Control Mode
+        self.control_mode = URControl.ControlMode(msg.data)
+
+        # 컨트롤 모드가 리셋일때, 베이지안 필터를 리셋함. 리셋을 콜벡에서 처리하는 이유는 동기화 때문임
+        if self.control_mode == URControl.ControlMode.RESET:
+            self.bayisian_filter.reset()
 
     # 로지스틱 함수 정의
     @staticmethod
@@ -318,75 +386,6 @@ class ManipulatorPathPlanner:
 
         return poses
 
-    """
-
-    def planning(self, target_pose: Pose, dt: float = 0.1) -> np.array:
-        self.group.set_pose_target(target_pose)
-
-        is_success, trajectory, _, _ = self.group.plan()
-        trajectory: RobotTrajectory
-
-        # EEF Update
-        # Map Frame 기준 EEF Pose
-        current_eef_pose = self.eef_state.get_target_frame_pose()
-
-        # Position 만 넘파이 배열로 변환
-        current_eef_pose_vector = np.array(
-            [
-                current_eef_pose.pose.position.x,
-                current_eef_pose.pose.position.y,
-                current_eef_pose.pose.position.z,
-            ]
-        )
-
-        # 새로운 경로 탐색에 성공한 경우
-        if is_success:
-
-            # 경로 저장
-            self.trajectory = trajectory
-
-            # 가장 짧은 경로점을 찾음
-            nearest_point = trajectory.joint_trajectory.points[0]
-            nearest_point: JointTrajectoryPoint
-
-            joint_positions = np.array(nearest_point.positions)
-
-            # EEF Pose 계산
-            best_point = ManipulatorPathPlanner.forward_kinematics(joint_positions)[
-                :3, 3
-            ]
-
-            # 해당 포인트로 이동하기 위한 속도 벡터 생성, dt초에 이동
-            velocity_vector = (best_point - current_eef_pose_vector) / dt
-
-            # 선속도 벡터 리턴
-            return velocity_vector
-
-        elif not is_success and self.trajectory is not None:
-            # 이전 경로를 사용하여 최단 경로점을 찾음.
-
-            # Joint Trajectory를 EEF Trajectory 넘파이 배열로 변환
-            eef_poses = self.convert_joint_trajectory_to_eef_trajectory(self.trajectory)
-
-            # 현재 EEF 위치와 목표 EEF 위치 사이의 거리 계산
-            distances = np.linalg.norm(eef_poses - current_eef_pose_vector, axis=1)
-
-            # 거리가 가장 짧은 포인트 선택
-            best_point_idx = np.argmin(distances)
-            best_point = eef_poses[best_point_idx]
-
-            # 해당 포인트로 이동하기 위한 속도 벡터 생성, dt초에 이동
-            velocity_vector = (best_point - current_eef_pose_vector) / dt
-
-            # 선속도 벡터 리턴
-            return velocity_vector
-
-        # 경로 탐색에 실패한 경우, 예외 사항, 정지 명령
-        rospy.logwarn("Planning failed.")
-        return np.array([0.0, 0.0, 0.0])
-
-    """
-
     def straight_planning(
         self,
         target_pose: Pose,
@@ -424,7 +423,7 @@ class ManipulatorPathPlanner:
         x_distance = velocity_vector[0]
         distance = np.linalg.norm(velocity_vector)
 
-        if x_distance <= 0.02:
+        if x_distance <= 0.04:
             return np.array([0.0, 0.0, 0.0])
 
         velocity_vector = (
@@ -434,25 +433,31 @@ class ManipulatorPathPlanner:
         return velocity_vector
 
     def run(self):
-        _ = self.bayisian_filter.filter(
-            boxes=self.box_manager.normalized_boxes
-        )  # Automatically update the baysian filter
+        # 베이지안 필터는 BoxManager의 콜백 함수를 통해 자동으로 업데이트 됨.
 
-        best_object_id, best_object_possibility = (
-            self.bayisian_filter.get_best_object()
-        )  # Get the best object
+        # @@@@@ 컨트롤 모드에 대한 예외 처리 @@@@@
+        if self.control_mode == URControl.ControlMode.MANUAL:
+            # 매뉴얼 모드일 때만, best_object_id를 업데이트함. 그 외는 업데이트 되지 않음
+            self.best_object_id, self.is_success = (
+                self.bayisian_filter.get_best_object()
+            )
 
-        if best_object_id == -1:
-            rospy.logwarn("Cannot find the best object. Object ID: -1")
-            return
+        elif self.control_mode == URControl.ControlMode.FORCE_CONTROL:
+            # 힘 제어 모드일 때는 best_object_id를 -1로 설정함
+            self.best_object_id = -1
+            self.is_success = False
 
-        best_object_pose = self.box_manager.get_pose(best_object_id)
+        elif self.control_mode == URControl.ControlMode.HOMING:
+            # 홈 모드일 때는 best_object_id를 -2로 설정하고, 베이지안 필터를 초기화함
+            self.bayisian_filter.reset()
+            self.best_object_id = -2
+            self.is_success = False
+
+        # get_pose() 함수는 -1에 대하여 None, -2에 대하여 홈 포지션을 반환함
+        best_object_pose = self.box_manager.get_pose(self.best_object_id)
 
         if best_object_pose is None:
-            rospy.logwarn(
-                "The best object pose is None. Object ID: {}".format(best_object_id)
-            )
-            # 함수 중단용 return
+            rospy.logwarn("Cannot Find Best Object: {}".format(self.best_object_id))
             return
 
         linear_velocity = self.straight_planning(
@@ -465,16 +470,8 @@ class ManipulatorPathPlanner:
             x=linear_velocity[0], y=linear_velocity[1], z=linear_velocity[2]
         )
 
-        rospy.loginfo(
-            f"Best Object ID: {best_object_id}, Possibility: {best_object_possibility}"
-        )
-
-        # Publish the baysian possibility
-        baysian_possibility_msg = Float32()
-        baysian_possibility_msg.data = best_object_possibility
-
         self.linear_velocity_pub.publish(linear_velocity_msg)
-        self.bayisian_filter_pub.publish(baysian_possibility_msg)
+        self.bayisian_success_pub.publish(Bool(data=self.is_success))
 
 
 def main():
@@ -482,7 +479,7 @@ def main():
 
     manipulator_path_planner = ManipulatorPathPlanner(move_group_name="manipulator")
 
-    r = rospy.Rate(10)  # TODO: Add rate
+    r = rospy.Rate(30)  # TODO: Add rate
     while not rospy.is_shutdown():
 
         manipulator_path_planner.run()

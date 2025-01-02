@@ -35,6 +35,7 @@ import random
 try:
     sys.path.append(roslib.packages.get_pkg_dir("base_package") + "/src")
     from state import State, EEFTwistState
+    from vr_controller import URControl
 except roslib.exceptions.ROSLibException:
     rospy.logfatal("Cannot find package test_package")
     sys.exit(1)
@@ -251,29 +252,21 @@ class RealIntentionGaussian:
         # 누적되는 교차점 데이터
         self.intersections = np.empty((0, 3))
 
-        # Subscriber
-        self.controller_sub = rospy.Subscriber(
-            "/controller/right/joy", Joy, self.controller_callback
+        # Control Mode Subscriber
+        self.control_mode_sub = rospy.Subscriber(
+            "/control_mode", UInt16, self.control_mode_callback
         )
+        self.control_mode = URControl.ControlMode.MANUAL
+
+    def control_mode_callback(self, msg: UInt16):
+        self.control_mode = URControl.ControlMode(msg.data)
+
+        if self.control_mode == URControl.ControlMode.RESET:
+            self.reset()
 
     def eef_twist_callback(self, msg: Twist):
         """EEF 속도 메세지 콜백"""
         self.eef_twist = msg
-
-    def controller_callback(self, msg: Joy):
-        """오른쪽 컨트롤러 조이스틱 메세지 콜백"""
-        if len(msg.buttons) != 4:
-            rospy.logwarn("Invalid controller message")
-            return
-
-        A = msg.buttons[0]
-        B = msg.buttons[1]
-        SF = msg.buttons[2]
-        TF = msg.buttons[3]
-
-        if A:
-            self.reset()
-            rospy.loginfo("Reset")
 
     def reset(self):
         """평균, 공분산, 교차점 데이터 초기화"""
@@ -334,7 +327,7 @@ class RealIntentionGaussian:
 
         if np.isclose(np.linalg.norm(v), 0):
             rospy.logwarn("No velocity")
-            return None, None
+            return False
 
         # 교점 계산
         forward, intersection = (
@@ -345,11 +338,11 @@ class RealIntentionGaussian:
 
         if np.isnan(intersection).any():
             rospy.logwarn("No intersection")
-            return None, None
+            return False
 
         if not forward:
             rospy.logwarn("No forward intersection")
-            return None, None
+            return False
 
         try:
             # m -> mm
@@ -368,63 +361,56 @@ class RealIntentionGaussian:
                 )
             )
 
-            # 3D -> 2D 변환
-            mean_2d, cov_2d = None, None
             mean_2d, cov_2d = self.plane.transform_to_2d(mean, cov)
 
             if mean_2d is not None and cov_2d is not None:
-
                 self.mean = mean_2d
                 self.cov = cov_2d
-
                 self.pose_with_cov = pose_with_cov
 
-            return mean_2d, cov_2d
+                return True
 
         except ValueError as ve:
             # Transform 2D Error
             rospy.logwarn(ve)
-            return None, None
+            return False
 
         except Exception as ex:
             rospy.logwarn(ex)
-            return None, None
+            return False
 
     def get_boxes_with_pdf(self):
         """박스 매니저에 있는 박스 객체에 PDF를 추가하여 리턴. 박스 매니저 인스턴스를 수정하지는 않음"""
         update_msg = BoxObjectMultiArrayWithPDF()
 
-        if len(self.box_manager.boxes_msg.boxes) == 0:
-            # Empty boxes
-            rospy.logwarn("No boxes")
-            return update_msg
-
         # Update header
         update_msg.header = self.box_manager.boxes_msg.header
 
-        rv = multivariate_normal(self.mean, self.cov, allow_singular=True)
+        if len(self.box_manager.boxes_msg.boxes) == 0:
+            # Empty boxes
+            rospy.logwarn("get_boxes_with_pdf: No boxes")
+            return None
 
+        rv = multivariate_normal(self.mean, self.cov, allow_singular=True)
         max_pdf = rv.pdf(self.mean)
+
+        if max_pdf == 0:
+            rospy.logwarn("get_boxes_with_pdf: Max PDF is zero")
+            return None
 
         for box in self.box_manager.boxes_msg.boxes:
             box: BoxObjectWithPDF
-
-            updated_box = BoxObjectWithPDF()
+            updated_box = box
 
             box_position = np.array(
                 [box.pose.position.x, box.pose.position.y, box.pose.position.z]
             )
 
             position_2d, _, _ = self.plane.project_to_plane(box_position)
-            pdf = rv.pdf(position_2d)  # m -> mm Scale
+            pdf = rv.pdf(position_2d)
 
             # Normalize PDF
-            updated_box = box
-            if max_pdf == 0:
-                updated_box.pdf = 1.0 / len(self.box_manager.boxes_msg.boxes)
-
-            else:
-                updated_box.pdf = pdf / max_pdf
+            updated_box.pdf = pdf / max_pdf
 
             update_msg.boxes.append(box)
 
@@ -457,14 +443,19 @@ def main():
     while not rospy.is_shutdown():
 
         # Update mean and covariance
-        intention.calculate_mean_and_cov()
+        is_success = intention.calculate_mean_and_cov()
 
         rospy.loginfo(f"Mean: {intention.mean}")
         rospy.loginfo(f"Num of Intersections: {len(intention.intersections)}")
 
         # Publish PDF
-        # 문제가 있으면, 초기화된 메세지가 발행됨.
-        intention_publisher.publish(intention.get_boxes_with_pdf())
+        if is_success:
+            msg = intention.get_boxes_with_pdf()
+            if msg is not None:
+                # 교차점이 쌓이고, PDF가 계산되면 PDF가 포함된 박스 메세지를 발행
+                intention_publisher.publish(msg)
+
+        # 거리, 교차점 수, 로그는 항상 발행
         distance_publisher.publish(Float32(data=intention.distance))
         intersection_publisher.publish(Int32(data=intention.intersections.shape[0]))
         log_publisher.publish(intention.pose_with_cov)
