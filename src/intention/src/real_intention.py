@@ -293,10 +293,13 @@ class RealIntentionGaussian:
         pose_with_cov_stamp.pose.pose.position = Point(x=mean[0], y=mean[1], z=mean[2])
         pose_with_cov_stamp.pose.pose.orientation = Quaternion(x=0, y=0, z=0, w=1)
 
-        cov = np.eye(6)
-        cov[0:2, 0:2] = cov
+        # 6x6 크기의 영행렬 생성
+        np_cov = np.zeros((6, 6))
 
-        pose_with_cov_stamp.pose.covariance = list(cov.flatten())
+        # 3x3 부분 유지
+        np_cov[0:3, 0:3] = cov
+
+        pose_with_cov_stamp.pose.covariance = list(np_cov.flatten())
 
         return pose_with_cov_stamp
 

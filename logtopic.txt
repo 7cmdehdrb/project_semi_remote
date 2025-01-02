@@ -1,0 +1,15 @@
+/box_objects/pdf
+/box_objects/pose_array
+/box_objects/raw
+/controller/right/joy
+/controller/right/pose
+/controller/right/twist
+/end_effector/twist
+/intention/distance
+/intention/intersection_length
+/intention/log/gaussian
+/joint_states
+/vacuum
+/vacuum_status
+/wrench
+/desired_box
