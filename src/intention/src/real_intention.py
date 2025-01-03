@@ -40,6 +40,7 @@ except roslib.exceptions.ROSLibException:
     rospy.logfatal("Cannot find package test_package")
     sys.exit(1)
 
+PoseWithCovarianceStamped
 
 class Plane:
     def __init__(self, n: np.array, d: float):
@@ -232,6 +233,7 @@ class RealIntentionGaussian:
             d=-0.9447713826362829,
         )
         self.scale = 1.0
+        self.small_value = 0.001
 
         # Define EEF state
         self.eef_pose_state = State(topic=None, frame_id="VGC")
@@ -417,7 +419,7 @@ class RealIntentionGaussian:
             pdf = rv.pdf(position_2d)
 
             # Normalize PDF
-            updated_box.pdf = pdf / max_pdf
+            updated_box.pdf = np.clip(pdf / max_pdf, self.small_value, 1.0)
 
             update_msg.boxes.append(box)
 

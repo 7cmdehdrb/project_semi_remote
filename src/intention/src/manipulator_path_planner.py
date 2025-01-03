@@ -50,6 +50,7 @@ class BayisianFilter:
         self.small_value = 0.1
 
         self.hz = 10.0
+        self.alpha = 1.0
 
         self.intersection_length_sub = rospy.Subscriber(
             "/intention/intersection_length", Int32, self.intersection_length_callback
@@ -61,85 +62,29 @@ class BayisianFilter:
 
     def parse_box_object_to_dict(self, normalized_boxes: BoxObjectMultiArrayWithPDF):
         # Max PDF에 대하여 정규화된 값. 이 값을 다시 정규화하여 사용해야 함.
+        # 재정규화 안함. 병신같네 ㅅㅂ.
         baysian_objects = {}
 
         # 딕셔너리로 전환
         for box in normalized_boxes.boxes:
             box: BoxObjectWithPDF
 
-            baysian_objects[str(box.id)] = np.clip(box.pdf, self.small_value, 1.0)
+            baysian_objects[str(box.id)] = box.pdf
+
+            # clip도 intention 레벨에서 처리했음
 
         # 정규화
-        normalized_constant = sum(baysian_objects.values())
+        # normalized_constant = sum(baysian_objects.values())
 
-        for id, possibility in baysian_objects.items():
-            baysian_objects[str(id)] = possibility / normalized_constant
+        # for id, possibility in baysian_objects.items():
+        #     baysian_objects[str(id)] = possibility / normalized_constant
 
         return baysian_objects
 
     def filter(
         self,
         boxes: BoxObjectMultiArrayWithPDF,
-        ignore: bool = False,
     ):
-        if ignore:
-            # 베이지안 확률을 사용하지 않고, 정규화된 PDF를 그대로 사용할 때
-            objects = self.parse_box_object_to_dict(boxes)
-            objects: dict
-
-            new_baysian_objects = {}
-
-            # 정규화 상수 계산
-            normalized_constant = sum([float(value) for value in objects.values()])
-
-            if len(self.baysian_objects.items()) == 0:
-                # 초기화
-                for id, possibility in objects.items():
-                    new_baysian_objects[str(id)] = {
-                        "possibility": self.small_value,
-                        "integral": 0.0,
-                    }
-
-                self.baysian_objects = new_baysian_objects
-
-                return self.baysian_objects
-
-            # 기존 오브젝트들에 대해 확률 업데이트
-            for id, value in self.baysian_objects.items():
-                input_possibility = objects[str(id)]
-
-                possibility = float(value["possibility"])
-                integral = float(value["integral"])
-
-                new_possibility = input_possibility
-
-                new_integral = (
-                    integral + (new_possibility) * 0.1
-                )  # 적분값 업데이트. 시간 간격은 0.1
-
-                new_baysian_objects[str(id)] = {
-                    "possibility": float(new_possibility),
-                    "integral": float(new_integral),
-                }
-
-            self.baysian_objects = new_baysian_objects
-
-            # print(
-            #     f"Possibility: ",
-            #     [
-            #         round(float(value["possibility"]), 3)
-            #         for value in new_baysian_objects.values()
-            #     ],
-            # )
-            # print(
-            #     f"Integral: ",
-            #     [
-            #         round(float(value["integral"]), 3)
-            #         for value in new_baysian_objects.values()
-            #     ],
-            # )
-
-            return self.baysian_objects
 
         # 새로 업데이트 되는 확률들
         objects = self.parse_box_object_to_dict(boxes)
@@ -152,7 +97,7 @@ class BayisianFilter:
         new_defined_list = list(set(objects.keys()) - set(self.baysian_objects.keys()))
         combined_list = list(set(objects.keys()) | set(self.baysian_objects.keys()))
 
-        # 새로운 오브젝트들에 대한 초기 확률 설정 및 확률 업데이트
+        # 새로운 오브젝트들에 대한 초기 확률 설정 및 확률 업데이트. 초기확률은 균등확률로 지정
         for id in new_defined_list:
             input_possibility = 1.0 / len(combined_list)
             new_baysian_objects[str(id)] = {
@@ -160,45 +105,43 @@ class BayisianFilter:
                 "integral": 0.0,
             }
 
-        # 기존 오브젝트들에 대해 확률 업데이트, 적분 유지
-        for id, value in self.baysian_objects.items():
-            input_possibility = objects[str(id)]
-
-            possibility = float(value["possibility"])
-            integral = float(value["integral"])
-
-            new_possibility = input_possibility * possibility
-            new_integral = integral
-
-            new_baysian_objects[str(id)] = {
-                "possibility": float(new_possibility),
-                "integral": float(new_integral),
-            }
-
-        # 정규화 상수 계산
-        normalized_constant = sum(
-            [float(value["possibility"]) for value in new_baysian_objects.values()]
-        )
-
         dt = 1.0 / self.hz
 
-        # 정규화된 확률로 업데이트, 적분 업데이트. 교차점 수가 적은 경우 강제로 확률 값을 낮춤
-        for id, value in new_baysian_objects.items():
-            possibility = float(value["possibility"])
-            integral = float(value["integral"])
+        # 기존 오브젝트들에 대해 확률 업데이트, 적분 유지
+        for id, value in self.baysian_objects.items():
+            input_possibility = objects[str(id)]  # 우도로 취급
 
-            # 초반 1초 값은 베이지안 필터에 반영하지 않음
-            # if self.intersection_length < int(self.hz):
-            #     normalized_possibility = self.small_value
-            # else:
-            #     normalized_possibility = possibility / normalized_constant
+            possibility = float(value["possibility"])  # 이전 확률
+            not_prior = 1.0 - possibility  # 이전 반대확률
 
-            normalized_possibility = possibility / normalized_constant
+            integral = float(value["integral"])  # 이전 적분
 
+            # 우도
+            likelihood = input_possibility  # 우도
+            not_likelihood = 1.0 - input_possibility  # 반대 우도
+
+            # 감쇠 계수 적용: 이전 확률과 현재 관측을 조합
+            smoothed_possibility = (
+                self.alpha * likelihood + (1 - self.alpha) * possibility
+            )
+            smoothed_not_possibility = (
+                self.alpha * not_likelihood + (1 - self.alpha) * not_prior
+            )
+
+            # 사후확률 계산
+            post_probability = smoothed_possibility * possibility  # 사후확률
+            post_not_probability = smoothed_not_possibility * not_prior  # 반대 사후확률
+
+            # 정규화 상수
+            normalized_constant = post_probability + post_not_probability
+
+            # 정규화
+            new_possibility = float(post_probability / normalized_constant)
+
+            # 딕셔너리 업데이트
             new_baysian_objects[str(id)] = {
-                "possibility": normalized_possibility,
-                "integral": integral
-                + (normalized_possibility) * dt,  # 적분값 업데이트. 시간 간격은 0.1
+                "possibility": new_possibility,
+                "integral": integral + (new_possibility * dt),
             }
 
         self.baysian_objects = new_baysian_objects
@@ -214,6 +157,8 @@ class BayisianFilter:
         if len(self.baysian_objects.items()) == 0:
             # rospy.logwarn("The baysian objects are empty.")
             return -1, 0.0
+        
+        
 
         # 1. 확률이 0.9 이상인 경우 ID 반환
         best_object_id = max(
@@ -222,8 +167,6 @@ class BayisianFilter:
         best_object_possibility = float(
             self.baysian_objects[str(best_object_id)]["possibility"]
         )
-
-        print(round(best_object_possibility, 3))
 
         # 확률이 0.9 이상이고, 교차점이 1초 이상인 경우 반환
         if best_object_possibility >= 0.9 and self.intersection_length > int(
@@ -276,7 +219,7 @@ class BoxManager:
 
         for callback in self.callbacks:
             callback: callable
-            callback(msg, ignore=False)
+            callback(msg)
 
     def get_pose(self, id: int):
         if id == -1:
