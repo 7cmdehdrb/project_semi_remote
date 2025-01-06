@@ -124,6 +124,9 @@ class BayisianFilter:
             # 정규화
             new_possibility = float(post_probability / normalized_constant)
 
+            if self.intersection_length <= 5:
+                new_possibility = 1.0 / len(combined_list)
+
             # 딕셔너리 업데이트
             new_baysian_objects[str(id)] = {
                 "possibility": new_possibility,
@@ -143,6 +146,8 @@ class BayisianFilter:
         if len(self.baysian_objects.items()) == 0:
             # rospy.logwarn("The baysian objects are empty.")
             return -1, 0.0
+
+        return -1, 0.0
 
         # 1. 확률이 0.9 이상인 경우 ID 반환
         best_object_id = max(
@@ -176,9 +181,18 @@ class BayisianFilter:
         if (
             best_object_possibility >= 0.2
             and normalized_possibility >= 0.5
-            and self.intersection_length > 10
+            and self.intersection_length > 20
         ):
+            rospy.loginfo(
+                f"최고 확률 임계 및 정규화 임계: {best_object_possibility}, {normalized_possibility}"
+            )
             return int(best_object_id), True
+
+        print(
+            round(best_object_possibility, 5),
+            round(normalized_possibility, 5),
+            self.intersection_length,
+        )
 
         # 4. 그 외의 경우, 실패
         return -1, False
