@@ -71,13 +71,7 @@ class BayisianFilter:
 
             baysian_objects[str(box.id)] = box.pdf
 
-            # clip도 intention 레벨에서 처리했음
-
-        # 정규화
-        # normalized_constant = sum(baysian_objects.values())
-
-        # for id, possibility in baysian_objects.items():
-        #     baysian_objects[str(id)] = possibility / normalized_constant
+            # clip도 intention 레벨에서 처리했음. 이제는 필요 없음.
 
         return baysian_objects
 
@@ -120,17 +114,9 @@ class BayisianFilter:
             likelihood = input_possibility  # 우도
             not_likelihood = 1.0 - input_possibility  # 반대 우도
 
-            # 감쇠 계수 적용: 이전 확률과 현재 관측을 조합
-            smoothed_possibility = (
-                self.alpha * likelihood + (1 - self.alpha) * possibility
-            )
-            smoothed_not_possibility = (
-                self.alpha * not_likelihood + (1 - self.alpha) * not_prior
-            )
-
             # 사후확률 계산
-            post_probability = smoothed_possibility * possibility  # 사후확률
-            post_not_probability = smoothed_not_possibility * not_prior  # 반대 사후확률
+            post_probability = likelihood * possibility  # 사후확률
+            post_not_probability = not_likelihood * not_prior  # 반대 사후확률
 
             # 정규화 상수
             normalized_constant = post_probability + post_not_probability
@@ -157,8 +143,6 @@ class BayisianFilter:
         if len(self.baysian_objects.items()) == 0:
             # rospy.logwarn("The baysian objects are empty.")
             return -1, 0.0
-        
-        
 
         # 1. 확률이 0.9 이상인 경우 ID 반환
         best_object_id = max(
@@ -182,22 +166,19 @@ class BayisianFilter:
             rospy.loginfo(f"최고 확률 임계 및 교차점 만족: {best_object_possibility}")
             return int(best_object_id), True
 
-        # 가장 높은 적분 값과 차상의 적분 값의 차이가 1.5 이상인 경우 반환
-        sorted_objects = sorted(
-            self.baysian_objects.items(), key=lambda x: x[1]["integral"], reverse=True
+        # possibility의 전체 합
+        total_possibility = sum(
+            [value["possibility"] for value in self.baysian_objects.values()]
         )
 
-        best_object_id_by_integral = int(sorted_objects[0][0])
-        best_object_integral = float(sorted_objects[0][1]["integral"])
+        normalized_possibility = best_object_possibility / total_possibility
 
-        _ = int(sorted_objects[1][0])
-        second_object_integral = float(sorted_objects[1][1]["integral"])
-
-        if best_object_integral - second_object_integral > 1.5:
-            rospy.loginfo(
-                f"적분값 차이 임계: {best_object_integral - second_object_integral}"
-            )
-            return int(best_object_id_by_integral), True
+        if (
+            best_object_possibility >= 0.2
+            and normalized_possibility >= 0.5
+            and self.intersection_length > 10
+        ):
+            return int(best_object_id), True
 
         # 4. 그 외의 경우, 실패
         return -1, False
@@ -223,9 +204,11 @@ class BoxManager:
 
     def get_pose(self, id: int):
         if id == -1:
+            # 찾지 못한 경우
             return None
 
         if id == -2:
+            # 홈 포지션
             return Pose(
                 position=Point(
                     x=0.409971536841809, y=-0.13331905253904977, z=0.1163856447241224
