@@ -1,5 +1,6 @@
 # 추적하지 않을 언어 형식 설정
 
 *.html linguist-vendored
+*.ipynb linguist-vendored
 *.py linguist-vendored=false
 *.cpp linguist-vendored=false
