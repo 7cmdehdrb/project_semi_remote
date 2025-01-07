@@ -147,8 +147,6 @@ class BayisianFilter:
             # rospy.logwarn("The baysian objects are empty.")
             return -1, 0.0
 
-        return -1, 0.0
-
         # 1. 확률이 0.9 이상인 경우 ID 반환
         best_object_id = max(
             self.baysian_objects, key=lambda x: self.baysian_objects[x]["possibility"]
@@ -157,44 +155,21 @@ class BayisianFilter:
             self.baysian_objects[str(best_object_id)]["possibility"]
         )
 
-        # 확률이 0.9 이상이고, 교차점이 1초 이상인 경우 반환
-        if best_object_possibility >= 0.9 and self.intersection_length > int(
-            self.hz * 1.0
+        # possibility 값만 추출
+        possibilities = [item["possibility"] for item in self.baysian_objects.values()]
+
+        # 중복을 제거하고 정렬하여 두 번째로 높은 값 찾기
+        second_highest_possibility = sorted(set(possibilities), reverse=True)[1]
+
+        # 확률이 0.1 이상이고, 가장 높은-두번째로 높은 possibility 차이가 0.1 이상이고, 교차점 수가 9개를 넘는 경우
+        if (
+            (best_object_possibility >= 0.1)
+            and ((best_object_possibility - second_highest_possibility) >= 0.1)
+            and (self.intersection_length > 9)
         ):
             rospy.loginfo(f"최고 확률 임계: {best_object_possibility}")
             return int(best_object_id), True
 
-        # 3초 이상 교차점이 있을 때, 확률이 0.5 이상인 경우 반환
-        if best_object_possibility >= 0.5 and self.intersection_length > int(
-            self.hz * 3.0
-        ):
-            rospy.loginfo(f"최고 확률 임계 및 교차점 만족: {best_object_possibility}")
-            return int(best_object_id), True
-
-        # possibility의 전체 합
-        total_possibility = sum(
-            [value["possibility"] for value in self.baysian_objects.values()]
-        )
-
-        normalized_possibility = best_object_possibility / total_possibility
-
-        if (
-            best_object_possibility >= 0.2
-            and normalized_possibility >= 0.5
-            and self.intersection_length > 20
-        ):
-            rospy.loginfo(
-                f"최고 확률 임계 및 정규화 임계: {best_object_possibility}, {normalized_possibility}"
-            )
-            return int(best_object_id), True
-
-        print(
-            round(best_object_possibility, 5),
-            round(normalized_possibility, 5),
-            self.intersection_length,
-        )
-
-        # 4. 그 외의 경우, 실패
         return -1, False
 
 

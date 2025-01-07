@@ -1,0 +1,7 @@
+<launch>
+    <node name="april_box_publisher_node" pkg="intention" type="april_box_publisher.py" output="screen" />
+    <node name="jacobian_twist_calculator" pkg="intention" type="eef_twist_publisher.py" output="screen" />
+    <node name="real_intention_gaussian_node" pkg="intention" type="real_intention.py" output="screen" />
+    <node name="manipulator_path_planner_node" pkg="intention" type="manipulator_path_planner.py" output="screen" />
+    <node name="control_test_node" pkg="intention" type="vr_controller.py" output="screen" />
+</launch>

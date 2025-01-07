@@ -1,0 +1,13 @@
+<launch>
+    <!-- Include ros_tcp_endpoint's endpoint.launch -->
+    <include file="$(find ros_tcp_endpoint)/launch/endpoint.launch" />
+
+    <!-- Include intention's moveit.launch -->
+    <include file="$(find intention)/launch/moveit.launch" />
+
+    <!-- Include realsense2_camera's rs_camera.launch -->
+    <include file="$(find realsense2_camera)/launch/rs_camera.launch" />
+
+    <!-- Add vacuum_demo_node -->
+    <node name="vacuum_demo_node" pkg="VGC10_control" type="vacuum_demo.py" output="screen" />
+</launch>
