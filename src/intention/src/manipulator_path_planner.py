@@ -217,6 +217,17 @@ class BoxManager:
 
 class ManipulatorPathPlanner:
     def __init__(self, move_group_name: str = "ENDEFFECTOR"):
+        """Moveit Group"""
+        # self.robot = RobotCommander()
+        # self.scene = PlanningSceneInterface()
+        # self.group = MoveGroupCommander(move_group_name)
+
+        # self.group.set_planner_id("RRTConnectkConfigDefault")
+        # self.group.set_num_planning_attempts(10)
+        # self.group.set_max_velocity_scaling_factor(0.1)
+        # self.group.set_max_acceleration_scaling_factor(0.1)
+        # self.group.set_pose_reference_frame("map")
+
         self.bayisian_filter_pub = rospy.Publisher(
             "/auto_controller/bayisian_possibility", Float32, queue_size=1
         )
@@ -417,6 +428,71 @@ class ManipulatorPathPlanner:
         ) * ManipulatorPathPlanner.logistic(distance, midpoint, steepness, 0.05, 1.0)
 
         return velocity_vector
+
+    def ompl_planning(self, target_pose: Pose, dt: float = 0.1) -> np.array:
+        self.group.set_pose_target(target_pose)
+
+        is_success, trajectory, _, _ = self.group.plan()
+        trajectory: RobotTrajectory
+
+        # EEF Update
+        # Map Frame 기준 EEF Pose
+        current_eef_pose = self.eef_state.get_target_frame_pose()
+
+        # Position 만 넘파이 배열로 변환
+        current_eef_pose_vector = np.array(
+            [
+                current_eef_pose.pose.position.x,
+                current_eef_pose.pose.position.y,
+                current_eef_pose.pose.position.z,
+            ]
+        )
+
+        # 새로운 경로 탐색에 성공한 경우
+        if is_success:
+
+            # 경로 저장
+            self.trajectory = trajectory
+
+            # 가장 짧은 경로점을 찾음
+            nearest_point = trajectory.joint_trajectory.points[0]
+            nearest_point: JointTrajectoryPoint
+
+            joint_positions = np.array(nearest_point.positions)
+
+            # EEF Pose 계산
+            best_point = ManipulatorPathPlanner.forward_kinematics(joint_positions)[
+                :3, 3
+            ]
+
+            # 해당 포인트로 이동하기 위한 속도 벡터 생성, dt초에 이동
+            velocity_vector = (best_point - current_eef_pose_vector) / dt
+
+            # 선속도 벡터 리턴
+            return velocity_vector
+
+        elif not is_success and self.trajectory is not None:
+            # 이전 경로를 사용하여 최단 경로점을 찾음.
+
+            # Joint Trajectory를 EEF Trajectory 넘파이 배열로 변환
+            eef_poses = self.convert_joint_trajectory_to_eef_trajectory(self.trajectory)
+
+            # 현재 EEF 위치와 목표 EEF 위치 사이의 거리 계산
+            distances = np.linalg.norm(eef_poses - current_eef_pose_vector, axis=1)
+
+            # 거리가 가장 짧은 포인트 선택
+            best_point_idx = np.argmin(distances)
+            best_point = eef_poses[best_point_idx]
+
+            # 해당 포인트로 이동하기 위한 속도 벡터 생성, dt초에 이동
+            velocity_vector = (best_point - current_eef_pose_vector) / dt
+
+            # 선속도 벡터 리턴
+            return velocity_vector
+
+        # 경로 탐색에 실패한 경우, 예외 사항, 정지 명령
+        rospy.logwarn("Planning failed.")
+        return np.array([0.0, 0.0, 0.0])
 
     def run(self):
         # 베이지안 필터는 BoxManager의 콜백 함수를 통해 자동으로 업데이트 됨.
