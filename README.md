@@ -1,4 +1,4 @@
-# Project: Semi-Remote Manipulation System
+# Project: Semi-Autonomous Telemanipulation Order Picking Control
 
 This repository implements a semi-remote robotic manipulation system leveraging ROS and Unity. The project includes multiple packages for target object recognition, operator intent estimation, and mobile manipulator control, specifically designed for the UR5e robot with integrated peripherals.
 
@@ -100,6 +100,18 @@ Manufacturer-provided library for controlling the VGC10 suction gripper.
     roslaunch intention launch_base.launch
     roslaunch launch_intention.launch
     ```
+
+---
+
+## <i>Important Notice</i>
+
+**This repository does not include the client program for Meta Quest2.**  
+You must set up a separate client to publish the following messages:
+
+- `/controller/right/joy` (`/sensor_msgs/Joy`)
+- `/controller/right/twist` (`/geometry_msgs/Twist`)
+
+Additionally, ensure that the IP addresses for the manipulator (RTDE communication) and the suction gripper are configured separately.
 
 ---
 
