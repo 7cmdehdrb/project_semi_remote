@@ -118,6 +118,7 @@ Additionally, ensure that the IP addresses for the manipulator (RTDE communicati
 ---
 
 ## Analysis Results
+![framework04](https://github.com/user-attachments/assets/30ea6886-b5ff-4e2c-9210-f0353e85959f)
 
 ### CSV Data
 The file [final_results_by_params_2.csv](./src/log_file/final_results_by_params_2.csv) contains key analysis data. Below is a preview of the file's content:
